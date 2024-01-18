@@ -18,29 +18,20 @@
 #include <parlay/primitives.h>
 
 #include <common/geometry/aabb.h>
-#include <common/util/par_algo.h>
+#include <common/util/utils.h>
 #include <pm_kdtree.h>
 
 
 
-template<typename T>
-struct VecHash {
-    std::size_t operator()(const T& p) const {
-        std::size_t result = std::hash<typename T::value_type>{}(p[0]);
-        for (int i = 1; i < p.size(); i++) {
-            result ^= (std::hash<typename T::value_type>{}(p[i]) << i);
-        }
-        return result;
-    }
-};
+using namespace pmkd;
 
-parlay::sequence<pmkd::vec3f> genPts(size_t n, bool random = true, bool printInfo = true) {
-    parlay::sequence<pmkd::vec3f> points;
+parlay::sequence<vec3f> genPts(size_t n, bool random = true, bool printInfo = true) {
+    parlay::sequence<vec3f> points;
     points.reserve(n);
 
     unsigned seed = random ? std::chrono::system_clock::now().time_since_epoch().count() : 0;
     std::mt19937 gen(seed); // 以随机数种子初始化 Mersenne Twister 伪随机数生成器  
-    std::normal_distribution<pmkd::mfloat> dis(0.0, 5.0);
+    std::normal_distribution<mfloat> dis(0.0, 5.0);
 
     // 生成n个随机点  
     for (int i = 0; i < n; ++i) {
@@ -55,19 +46,19 @@ parlay::sequence<pmkd::vec3f> genPts(size_t n, bool random = true, bool printInf
     return points;
 }
 
-parlay::sequence<pmkd::AABB> genRanges(size_t n, bool random = true, bool printInfo = true) {
-    parlay::sequence<pmkd::AABB> ranges;
+parlay::sequence<AABB> genRanges(size_t n, bool random = true, bool printInfo = true) {
+    parlay::sequence<AABB> ranges;
     ranges.reserve(n);
 
     unsigned seed = random ? std::chrono::system_clock::now().time_since_epoch().count() : 0;
     std::mt19937 gen(seed); // 以随机数种子初始化 Mersenne Twister 伪随机数生成器  
-    std::normal_distribution<pmkd::mfloat> dis1(0.0, 5.0);
-    std::uniform_real_distribution<pmkd::mfloat> dis2(0.1, 3.0);
+    std::normal_distribution<mfloat> dis1(0.0, 5.0);
+    std::uniform_real_distribution<mfloat> dis2(0.1, 3.0);
 
     // 生成n个随机AABB
     for (int i = 0; i < n; ++i) {
-        pmkd::vec3f center(dis1(gen), dis1(gen), dis1(gen));
-        pmkd::vec3f lengthVec(dis2(gen), dis2(gen), dis2(gen));
+        vec3f center(dis1(gen), dis1(gen), dis1(gen));
+        vec3f lengthVec(dis2(gen), dis2(gen), dis2(gen));
         ranges.emplace_back(center - lengthVec, center + lengthVec);
     }
     if (printInfo) {
@@ -79,12 +70,12 @@ parlay::sequence<pmkd::AABB> genRanges(size_t n, bool random = true, bool printI
     return ranges;
 }
 
-pmkd::RangeQueryResponses rangeQuery_Brutal(
-    const parlay::sequence<pmkd::RangeQuery>& queries, const parlay::sequence<pmkd::vec3f>& pts) {
-    if (queries.empty()) return pmkd::RangeQueryResponses(0);
+RangeQueryResponses rangeQuery_Brutal(
+    const parlay::sequence<RangeQuery>& queries, const parlay::sequence<vec3f>& pts) {
+    if (queries.empty()) return RangeQueryResponses(0);
 
     size_t nq = queries.size();
-    pmkd::RangeQueryResponses responses(nq);
+    RangeQueryResponses responses(nq);
 
     for (size_t i = 0; i < nq; ++i) {
         auto resp = responses.at(i);
@@ -101,7 +92,7 @@ pmkd::RangeQueryResponses rangeQuery_Brutal(
     return responses;
 }
 
-bool isContentEqual(const pmkd::RangeQueryResponse& a, const pmkd::RangeQueryResponse& b) {
+bool isContentEqual(const RangeQueryResponse& a, const RangeQueryResponse& b) {
     bool isNull_a = !a.pts && !a.size;
     bool isNull_b = !b.pts && !b.size;
     if (isNull_a && isNull_b) return true;
@@ -109,8 +100,8 @@ bool isContentEqual(const pmkd::RangeQueryResponse& a, const pmkd::RangeQueryRes
     // both are not null
     if (*a.size != *b.size) return false;
 
-    std::unordered_set<pmkd::vec3f, VecHash<pmkd::vec3f>> set_a;
-    std::unordered_set<pmkd::vec3f, VecHash<pmkd::vec3f>> set_b;
+    std::unordered_set<vec3f, VecHash<vec3f>> set_a;
+    std::unordered_set<vec3f, VecHash<vec3f>> set_b;
     for (size_t i = 0; i < *a.size; ++i) {
         set_a.insert(a.pts[i]);
         set_b.insert(b.pts[i]);
@@ -140,8 +131,8 @@ void mTimerRepeated(const std::string& msg, int nIter, F&& func, Args&&...args) 
     fmt::print("{}: {}ms\n", msg, avgTime * 1000.0 / (double)nIter);
 }
 
-template<> struct fmt::formatter<pmkd::MortonType> {
-    formatter<pmkd::MortonType::value_type> int_formatter;
+template<> struct fmt::formatter<MortonType> {
+    formatter<MortonType::value_type> int_formatter;
 
     template <typename ParseContext>
     constexpr auto parse(ParseContext& ctx)
@@ -150,13 +141,13 @@ template<> struct fmt::formatter<pmkd::MortonType> {
     }
 
     template <typename FormatContext>
-    auto format(const pmkd::MortonType& s, FormatContext& ctx) const
+    auto format(const MortonType& s, FormatContext& ctx) const
     {
         return int_formatter.format(s.code, ctx);
     }
 };
 
-void printPMKDInfo(const pmkd::PMKDTree& tree) {
+void printPMKDInfo(const PMKDTree& tree) {
     auto treeInfo = tree.print();
     fmt::print("叶节点数：{}\n", treeInfo.leafNum);
     fmt::print("先序：\n{}\n", treeInfo.preorderTraversal);
@@ -164,13 +155,13 @@ void printPMKDInfo(const pmkd::PMKDTree& tree) {
     fmt::print("指标：\n{}\n", treeInfo.metrics);
     fmt::print("莫顿码：\n");
     for (const auto& morton : treeInfo.leafMortons) {
-        std::bitset<sizeof(pmkd::MortonType) * 8> biRepr(morton.code);
+        std::bitset<sizeof(MortonType) * 8> biRepr(morton.code);
         fmt::print("{} ", biRepr.to_string());
     }
     fmt::print("\n");
 }
 
-bool savePMKDInfo(const pmkd::PMKDTree& tree, const std::string& filename) {
+bool savePMKDInfo(const PMKDTree& tree, const std::string& filename) {
     auto treeInfo = tree.print(true);
 
     std::ofstream file(filename);

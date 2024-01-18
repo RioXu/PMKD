@@ -32,10 +32,6 @@ namespace pmkd {
 		std::unique_ptr<BufferPool> bufferPool;
 
 		PMKD_Config config;
-
-		void init();
-
-		//void expandStorage(size_t newSize);
 	public:
 		PMKDTree();
 
@@ -51,7 +47,7 @@ namespace pmkd {
 
 		size_t primSize() const { return ptNum; }
 
-		size_t primCapacity() const { return pts.size(); }
+		size_t primCapacity() const { return pts.capacity(); }
 
 		std::vector<QueryResponse> query(const vector<Query>& queries) const;
 
@@ -67,7 +63,13 @@ namespace pmkd {
 		void execute() {}
 
 	private:
-		void build();
+		void init();
+
+		void buildStatic();
+
+		void buildIncrement(size_t offset);
+
+		void expandStorage(size_t newCapacity);
 	};
 
 	struct PMKD_PrintInfo {

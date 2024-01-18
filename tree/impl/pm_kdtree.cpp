@@ -2,6 +2,7 @@
 #include <parlay/parallel.h>
 #include <parlay/primitives.h>
 
+#include <common/util/utils.h>
 #include <tree/pm_kdtree.h>
 #include <tree/kernel.h>
 
@@ -51,7 +52,7 @@ namespace pmkd {
 
 	PMKDTree::PMKDTree(const PMKD_Config& config) {
 		this->config = config;
-		this->config.expandFactor = min(this->config.expandFactor, 1.2f);
+		this->config.expandFactor = fmin(this->config.expandFactor, 1.2f);
 
 		init();
 	}
@@ -71,27 +72,20 @@ namespace pmkd {
 		ptNum = 0;
 	}
 
-	// void PMKDTree::expandStorage(size_t newSize) {
-	// 	// init leaves
-	// 	leaves.morton.resize(newSize);
-	// 	leaves.primIdx.resize(newSize);
+	void PMKDTree::expandStorage(size_t newCapacity) {
+		leaves.reserve(newCapacity);
 
-	// 	// init interiors
-	// 	// note: allocation of interiors can be async
-	// 	interiors.rangeL.resize(newSize);
-	// 	interiors.rangeR.resize(newSize);
-	// 	interiors.splitDim.resize(newSize);
-	// 	interiors.splitVal.resize(newSize);
-	// 	interiors.parentSplitDim.resize(newSize);
-	// 	interiors.parentSplitVal.resize(newSize);
-	// }
+		// note: allocation of interiors can be async
+		interiors.reserve(newCapacity);
+	}
 
-	void PMKDTree::build() {
+	void PMKDTree::buildStatic() {
 		if (ptNum == 0) {
 			return;
 		}
 		// get scene boundary
-		for (size_t i = 0; i < ptNum; ++i) { sceneBoundary.merge(pts[i]); }
+		//for (size_t i = 0; i < ptNum; ++i) { sceneBoundary.merge(pts[i]); }
+		sceneBoundary = reduce<AABB>(pts, MergeOp());
 		globalBoundary.merge(sceneBoundary);
 
 		// init leaves
@@ -209,6 +203,132 @@ namespace pmkd {
 		interiors.parentSplitVal = std::move(parentSplitVal);
 	}
 
+	void PMKDTree::buildIncrement(size_t offset) {
+		size_t sizeInc = ptNum - offset;
+		if (sizeInc == 0) {
+			return;
+		}
+		// adjust leaf size
+	
+		// adjust interior size
+
+		// get scene boundary
+		//for (size_t i = offset; i < ptNum; ++i) { sceneBoundary.merge(pts[i]); }
+		sceneBoundary.merge(reduce<AABB>(parlay::make_slice(pts).cut(offset, ptNum), MergeOp()));
+		globalBoundary.merge(sceneBoundary);
+
+		// increment leaf idx
+		auto primIdx_Inc = parlay::delayed_tabulate(sizeInc, [offset](int i) {return offset + i;});
+		leaves.primIdx.insert(leaves.primIdx.end(), primIdx_Inc);
+		MASSERT(leaves.primIdx.size() == ptNum);
+
+		// calculate morton code
+		parlay::parallel_for(0, sizeInc,
+			[&](size_t i) { BuildKernel::calcMortonCodes(i, sizeInc, pts.data()+offset, &sceneBoundary, leaves.morton.data()+offset); }
+		);
+
+		// reorder leaves using morton code
+		// note: there are multiple sorting algorithms to choose from
+		parlay::integer_sort_inplace(
+			parlay::make_slice(leaves.primIdx).cut(offset, ptNum),
+			[&](const auto& idx) {return leaves.morton[offset+idx].code;});
+		auto mortonSorted = parlay::delayed_tabulate(sizeInc, [&](int i) {return leaves.morton[leaves.primIdx[offset+i]];});
+		leaves.morton.insert(leaves.morton.end(), mortonSorted);
+		MASSERT(leaves.morton.size() == ptNum);
+
+		
+
+		// calculate metrics
+		auto metrics = bufferPool->acquire<int>(ptNum - 1);
+
+		parlay::parallel_for(0, ptNum - 1,
+			[&](size_t i) {
+				BuildKernel::calcBuildMetrics(
+					i, ptNum - 1, globalBoundary, leaves.getRawRepr(), metrics.data(),
+					interiors.splitDim.data(), interiors.splitVal.data());
+			}
+		);
+
+		auto visitCount = vector<AtomicCount>(ptNum - 1);
+		auto innerBuf = bufferPool->acquire<int>(ptNum - 1);
+		auto leafBuf = bufferPool->acquire<int>(ptNum);
+		BuildAid aid{ metrics.data(),visitCount.data(),innerBuf.data(),leafBuf.data() };
+		// build interior nodes
+		if (config.optimize) {
+			int* range[2] = { interiors.rangeL.data(),interiors.rangeR.data() };
+			parlay::parallel_for(0, ptNum,
+				[&](size_t i) {
+					BuildKernel::buildInteriors_opt(
+						i, ptNum, leaves.getRawRepr(),
+						range, interiors.splitDim.data(), interiors.splitVal.data(),
+						interiors.parentSplitDim.data(), interiors.parentSplitVal.data(),
+						aid);
+				}
+			);
+		}
+		else {
+			parlay::parallel_for(0, ptNum,
+				[&](size_t i) {
+					BuildKernel::buildInteriors(
+						i, ptNum, leaves.getRawRepr(), interiors.getRawRepr(), aid);
+				}
+			);
+		}
+
+		// calculate new indices for interiors
+		auto& segLen = leafBuf;
+		leaves.segOffset = parlay::scan(segLen).first;
+
+		auto& mapidx = metrics;
+		parlay::parallel_for(0, ptNum - 1,
+			[&](size_t i) {
+				BuildKernel::calcInteriorNewIdx(
+					i, ptNum - 1, leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen, aid.leftLeafCount, mapidx.data());
+			}
+		);
+
+		// reorder interiors
+		auto& rangeL = innerBuf;
+		auto& rangeR = leafBuf;
+		rangeR.resize(ptNum - 1);
+		auto splitDim = bufferPool->acquire<int>(ptNum - 1);
+		auto splitVal = bufferPool->acquire<mfloat>(ptNum - 1);
+		parlay::parallel_for(0, ptNum - 1,
+			[&](size_t i) {
+				BuildKernel::reorderInteriors_step1(
+					i, ptNum - 1, interiors.getRawRepr(), mapidx.data(),
+					rangeL.data(), rangeR.data(),
+					splitDim.data(), splitVal.data());
+			}
+		);
+		bufferPool->release<int>(std::move(interiors.rangeL));
+		bufferPool->release<int>(std::move(interiors.rangeR));
+		bufferPool->release<int>(std::move(interiors.splitDim));
+		bufferPool->release<mfloat>(std::move(interiors.splitVal));
+
+		interiors.rangeL = std::move(rangeL);
+		interiors.rangeR = std::move(rangeR);
+		interiors.splitDim = std::move(splitDim);
+		interiors.splitVal = std::move(splitVal);
+
+		auto parentSplitDim = bufferPool->acquire<int>(ptNum - 1);
+		auto parentSplitVal = bufferPool->acquire<mfloat>(ptNum - 1);
+		parlay::parallel_for(0, ptNum - 1,
+			[&](size_t i) {
+				BuildKernel::reorderInteriors_step2(
+					i, ptNum - 1, interiors.getRawRepr(), mapidx.data(),
+					parentSplitDim.data(), parentSplitVal.data());
+			}
+		);
+		bufferPool->release<int>(std::move(interiors.parentSplitDim));
+		bufferPool->release<mfloat>(std::move(interiors.parentSplitVal));
+		bufferPool->release<int>(std::move(mapidx));
+
+		interiors.parentSplitDim = std::move(parentSplitDim);
+		interiors.parentSplitVal = std::move(parentSplitVal);
+	}
+
+	
 	PMKD_PrintInfo PMKDTree::print(bool verbose) const {
 		PMKD_PrintInfo info;
 		info.leafNum = ptNum;
@@ -334,28 +454,29 @@ namespace pmkd {
 	}
 
 	void PMKDTree::insert(const vector<vec3f>& _pts) {
-		ptNum += pts.size();
-		this->pts = pts;
-		build();
+		//ptNum += pts.size();
+		//this->pts = pts;
+		//build();
 
-		// ptNum += _pts.size();
-		// if (primSize() > primCapacity()) {
-		// 	size_t newSize = ptNum * config.expandFactor;
-		// 	pts.reserve(newSize);
-		// 	pts.insert(pts.end(), _pts);
-		// 	pts.resize(newSize);
-		// }
-		// else {
-		// 	pts.insert(pts.end(), _pts);
-		// }
-		
+		ptNum += _pts.size();
+		if (primSize() > primCapacity()) {
+			// need expansion
+			size_t newCapacity = ptNum * config.expandFactor;
+			pts.reserve(newCapacity);
+			expandStorage(newCapacity);
+		}
+		pts.insert(pts.end(), _pts);
+		MASSERT(pts.size() == ptNum);
+
+		buildIncrement(ptNum - _pts.size());
 	}
 
 	void PMKDTree::insert(vector<vec3f>&& pts) {
 		ptNum += pts.size();
 		this->pts = pts;
-		build();
+		buildStatic();
 	}
+
 
 	void PMKDTree::remove(const vector<vec3f>& pts) {}
 }

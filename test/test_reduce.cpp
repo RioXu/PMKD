@@ -4,11 +4,11 @@
 using namespace pmkd;
 
 /* 单核merge对比并行merge.
-   结论：O0优化下并行版显著更快，O3优化下性能相仿
+   结论：O0优化下并行版显著更快，O3优化下在1e5规模以上并行版开始占据优势
 */
 void testParallelReduce() {
-    const size_t n = 100000;
-    auto pts = genPts(n);
+    const size_t n = 1e7;
+    auto pts = genPts(n, true, false);
     // 单线程顺序merge计时
     auto start = std::chrono::high_resolution_clock::now();
 

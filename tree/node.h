@@ -40,6 +40,18 @@ namespace pmkd {
 		vector<int> segOffset;
 		vector<MortonType> morton;
 
+		void reserve(size_t capacity) {
+			primIdx.reserve(capacity);
+			segOffset.reserve(capacity);
+			morton.reserve(capacity);
+		}
+
+		void resize(size_t size) {
+			primIdx.resize(size);
+			segOffset.resize(size);
+			morton.resize(size);
+		}
+
 		LeavesRawRepr getRawRepr(size_t offset = 0u) {
 			return LeavesRawRepr{
 				primIdx.data() + offset,
@@ -61,6 +73,24 @@ namespace pmkd {
 		vector<mfloat> splitVal;
 		vector<int> parentSplitDim;
 		vector<mfloat> parentSplitVal;
+
+		void reserve(size_t capacity) {
+			rangeL.reserve(capacity);
+			rangeR.reserve(capacity);
+			splitDim.reserve(capacity);
+			splitVal.reserve(capacity);
+			parentSplitDim.reserve(capacity);
+			parentSplitVal.reserve(capacity);
+		}
+
+		void resize(size_t size) {
+			rangeL.resize(size);
+			rangeR.resize(size);
+			splitDim.resize(size);
+			splitVal.resize(size);
+			parentSplitDim.resize(size);
+			parentSplitVal.resize(size);
+		}
 
 		InteriorsRawRepr getRawRepr(size_t offset = 0u) {
 			return InteriorsRawRepr{

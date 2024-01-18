@@ -3,13 +3,19 @@
 #include <parlay/slice.h>
 
 namespace pmkd {
+#ifdef DEBUG
+#define MASSERT(expr) assert(expr)
+#else
+#define MASSERT(expr) 
+#endif
+
+
     // **************************************************************
     // An implementation of reduce.
     // Uses divide and conquer with a base case of block_size.
     // Works on arbitrary "ranges" (e.g. sequences, delayed sequences,
     //    std::vector, std::string, ..).
     // **************************************************************
-
     template<typename RetType, typename Range, typename BinaryOp>
     auto reduce(const Range& A, BinaryOp&& selfBinOp) {
         long n = A.size();
@@ -28,4 +34,15 @@ namespace pmkd {
         selfBinOp(L, R);
         return L;
     }
+
+    template<typename T>
+    struct VecHash {
+        std::size_t operator()(const T& p) const {
+            std::size_t result = std::hash<typename T::value_type>{}(p[0]);
+            for (int i = 1; i < p.size(); i++) {
+                result ^= (std::hash<typename T::value_type>{}(p[i]) << i);
+            }
+            return result;
+        }
+    };
 }
