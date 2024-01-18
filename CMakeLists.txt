@@ -58,6 +58,10 @@ add_executable (test_opt "test/test_opt.cpp")
 target_link_libraries(test_opt PRIVATE pmkd fmtlog-static)
 
 
+add_executable (test_query_perf "test/test_query_perf.cpp")
+target_link_libraries(test_query_perf PRIVATE pmkd fmtlog-static)
+
+
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET pmkd PROPERTY CXX_STANDARD 20)
   set_property(TARGET pmkd-cpu PROPERTY CXX_STANDARD 20)

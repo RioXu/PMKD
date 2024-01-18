@@ -18,7 +18,7 @@ namespace pmkd {
 	struct PMKD_PrintInfo;
 
 	class PMKDTree {
-	private:
+	public:
 		vector<vec3f> pts;
 		AABB sceneBoundary;
 		AABB globalBoundary;
@@ -48,6 +48,8 @@ namespace pmkd {
 		PMKD_PrintInfo print(bool verbose = false) const;
 
 		void destroy();
+
+		AABB getGlobalBoundary() const { return globalBoundary; }
 
 		size_t primSize() const { return ptNum; }
 

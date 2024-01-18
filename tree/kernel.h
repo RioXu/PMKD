@@ -55,7 +55,9 @@ namespace pmkd {
 	};
 
 	struct UpdateKernel {
-
+		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
+			const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
+			OUTPUT(int*) binIdx);
 	};
 
 	struct VerifyKernel {

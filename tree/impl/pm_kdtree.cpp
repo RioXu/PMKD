@@ -51,7 +51,7 @@ namespace pmkd {
 
 	PMKDTree::PMKDTree(const PMKD_Config& config) {
 		this->config = config;
-		this->config.expandFactor = min(this->config.expandFactor, 1.2f);
+		this->config.expandFactor = fmin(this->config.expandFactor, 1.2f);
 
 		init();
 	}
@@ -110,7 +110,7 @@ namespace pmkd {
 
 		// calculate morton code
 		parlay::parallel_for(0, ptNum,
-			[&](size_t i) { BuildKernel::calcMortonCodes(i, ptNum, pts.data(), &sceneBoundary, leaves.morton.data()); }
+			[&](size_t i) { BuildKernel::calcMortonCodes(i, ptNum, pts.data(), &globalBoundary, leaves.morton.data()); }
 		);
 
 		// reorder leaves using morton code
@@ -118,6 +118,8 @@ namespace pmkd {
 		parlay::integer_sort_inplace(leaves.primIdx, [&](const auto& idx) {return leaves.morton[idx].code;});
 		auto mortonSorted = parlay::tabulate(ptNum, [&](int i) {return leaves.morton[leaves.primIdx[i]];});
 		leaves.morton = std::move(mortonSorted);
+		auto ptsSorted = parlay::tabulate(ptNum, [&](int i) {return pts[leaves.primIdx[i]];});
+		pts = std::move(ptsSorted);
 
 		// calculate metrics
 		auto metrics = bufferPool->acquire<int>(ptNum - 1);
@@ -287,7 +289,8 @@ namespace pmkd {
 		if (verbose) {
 			// get primIdx
 			info.leafPoints.resize(ptNum);
-			parlay::parallel_for(0, ptNum, [&](size_t i) { info.leafPoints[i] = pts[leaves.primIdx[i]];});
+			//parlay::parallel_for(0, ptNum, [&](size_t i) { info.leafPoints[i] = pts[leaves.primIdx[i]];});
+			info.leafPoints.assign(pts.begin(), pts.end());
 			info.splitDim.assign(interiors.splitDim.begin(), interiors.splitDim.end());
 			info.splitVal.assign(interiors.splitVal.begin(), interiors.splitVal.end());
 		}
@@ -334,8 +337,8 @@ namespace pmkd {
 	}
 
 	void PMKDTree::insert(const vector<vec3f>& _pts) {
-		ptNum += pts.size();
-		this->pts = pts;
+		ptNum += _pts.size();
+		this->pts = _pts;
 		build();
 
 		// ptNum += _pts.size();
@@ -351,9 +354,9 @@ namespace pmkd {
 		
 	}
 
-	void PMKDTree::insert(vector<vec3f>&& pts) {
-		ptNum += pts.size();
-		this->pts = pts;
+	void PMKDTree::insert(vector<vec3f>&& _pts) {
+		ptNum += _pts.size();
+		this->pts = _pts;
 		build();
 	}
 

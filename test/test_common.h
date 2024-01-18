@@ -4,6 +4,8 @@
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <fmtlog.h>
+
+#include <algorithm>
 #include <iostream>
 #include <bitset>
 #include <vector>

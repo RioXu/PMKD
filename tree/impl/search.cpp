@@ -31,7 +31,8 @@ namespace pmkd {
 			}
 			if (!onRight) {
 				// hit leaf with index <begin>
-				resp[qIdx].exist = pts[leaves.primIdx[begin]] == pt;
+				//resp[qIdx].exist = pts[leaves.primIdx[begin]] == pt;
+				resp[qIdx].exist = pts[begin] == pt;
 				break;
 			}
 		}
@@ -67,7 +68,8 @@ namespace pmkd {
 			}
 			if (!onRight) {
 				// hit leaf with index <begin>
-				resp[qIdx].exist = pts[leaves.primIdx[begin]] == pt;
+				//resp[qIdx].exist = pts[leaves.primIdx[begin]] == pt;
+				resp[qIdx].exist = pts[begin] == pt;
 				// atomic max
 				atomic_fetch_max_explicit(&rangeR, begin, std::memory_order_release,
 					[](int a, int b) {return std::max(a, b);});
@@ -118,7 +120,8 @@ namespace pmkd {
 			if (onRight) continue;
 
 			// hit leaf with index <begin>
-			auto& target = pts[leaves.primIdx[begin]];
+			//auto& target = pts[leaves.primIdx[begin]];
+			auto& target = pts[begin];
 			if (box.include(target)) {
 				auto& respSize = *(resps.getSizePtr(qIdx));
 				resps.getBufPtr(qIdx)[respSize++] = target;  // note: check correctness on GPU
