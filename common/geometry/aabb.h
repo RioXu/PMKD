@@ -42,6 +42,12 @@ namespace pmkd {
 				ptMin.z <= pt.z && pt.z <= ptMax.z;
 		}
 
+		inline bool include(const AABB& b) const {
+			return include(b.ptMin) && include(b.ptMax);
+		}
+
+		bool operator==(const AABB& b) const { return ptMin == b.ptMin && ptMax == b.ptMax; }
+
 		inline void reset() {
 			ptMin = vec3f(FMAX, FMAX, FMAX);
 			ptMax = vec3f(-FMAX, -FMAX, -FMAX);

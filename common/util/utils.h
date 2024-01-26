@@ -1,9 +1,13 @@
 #pragma once
+#include <fmt/printf.h>
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <fmt/std.h>
 #include <parlay/parallel.h>
 #include <parlay/slice.h>
 
 namespace pmkd {
-#ifdef DEBUG
+#ifdef M_DEBUG
 #define MASSERT(expr) assert(expr)
 #else
 #define MASSERT(expr) 
@@ -45,4 +49,26 @@ namespace pmkd {
             return result;
         }
     };
+
+    template<typename F, typename ...Args>
+    void mTimer(const std::string& msg, F&& func, Args&&...args) {
+        auto start = std::chrono::high_resolution_clock::now();
+        func(std::forward<Args>(args)...);
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed_time = end - start;
+        fmt::print("{}: {}ms\n", msg, elapsed_time.count() * 1000.0);
+    }
+
+    template<typename F, typename ...Args>
+    void mTimerRepeated(const std::string& msg, int nIter, F&& func, Args&&...args) {
+        double avgTime = 0.0;
+        for (int i = 0; i < nIter;++i) {
+            auto start = std::chrono::high_resolution_clock::now();
+            func(std::forward<Args>(args)...);
+            auto end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed_time = end - start;
+            avgTime += elapsed_time.count();
+        }
+        fmt::print("{}: {}ms\n", msg, avgTime * 1000.0 / (double)nIter);
+    }
 }

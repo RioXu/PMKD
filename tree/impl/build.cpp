@@ -25,14 +25,14 @@ namespace pmkd {
 	//	leaves_sorted.morton[idx] = leaves.morton[idx];
 	//}
 
-	void BuildKernel::calcBuildMetrics(int idx, int interiorSize, const AABB& gBoundary, LeavesRawRepr leaves,
+	void BuildKernel::calcBuildMetrics(int idx, int interiorSize, const AABB& gBoundary, INPUT(MortonType*) morton,
 		OUTPUT(int*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
 		if (idx >= interiorSize) return;
 
 		// reflects the highest differing bit between the keys covered by interior node idx
-		int metric = MortonType::calcMetric(leaves.morton[idx], leaves.morton[idx + 1]);
+		int metric = MortonType::calcMetric(morton[idx], morton[idx + 1]);
 		metrics[idx] = metric;
-		MortonType::calcSplit(metric, leaves.morton[idx + 1], gBoundary.ptMin, gBoundary.ptMax,
+		MortonType::calcSplit(metric, morton[idx + 1], gBoundary.ptMin, gBoundary.ptMax,
 			splitDim + idx, splitVal + idx);
 	}
 
@@ -42,7 +42,7 @@ namespace pmkd {
 		if (idx >= leafSize) return;
 
 		int parent;
-		if (idx == 0 || (idx != leafSize - 1 && aid.metrics[idx - 1] > aid.metrics[idx])) {
+		if (idx == 0 || (idx < leafSize - 1 && aid.metrics[idx - 1] > aid.metrics[idx])) {
 			// is left child of Interior idx
 			parent = idx;
 			//leaves.parentSplitDim[idx] = interiors.splitDim[parent];
@@ -76,7 +76,7 @@ namespace pmkd {
 				break;
 			}
 
-			if (left == 0 || (right != leafSize - 1 && aid.metrics[left - 1] > aid.metrics[right])) {
+			if (left == 0 || (right < leafSize - 1 && aid.metrics[left - 1] > aid.metrics[right])) {
 				// is left child of Interior right
 				parent = right;
 				//interiors.parent[current] = parent;

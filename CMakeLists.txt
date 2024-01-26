@@ -5,6 +5,8 @@ cmake_minimum_required (VERSION 3.14)
 
 project ("pmkd-cpu")
 
+# 架构和指令集信息
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=tigerlake -mavx")
 # 设置第三方库的路径
 set(EXTERNAL_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/external")
 # 设置parlay并行线程数
@@ -32,7 +34,7 @@ file(GLOB_RECURSE SOURCES_TREE "${CMAKE_SOURCE_DIR}/tree/*.cpp")
 add_library (pmkd STATIC ${SOURCES_TREE})
 set(PMKD_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/tree")
 target_include_directories(pmkd PUBLIC ${PMKD_INCLUDE_DIR})
-target_link_libraries(pmkd PUBLIC parlay)
+target_link_libraries(pmkd PUBLIC parlay fmtlog-static)
 
 # main
 add_executable (pmkd-cpu "${CMAKE_SOURCE_DIR}/parkd-cpu.cpp")
@@ -40,27 +42,35 @@ target_link_libraries(pmkd-cpu PRIVATE pmkd)
 
 # tests
 add_executable (test_reduce "test/test_reduce.cpp")
-target_link_libraries(test_reduce PRIVATE pmkd fmtlog-static)
+target_link_libraries(test_reduce PRIVATE pmkd)
 
 
 add_executable (test_correctness "test/test_correctness.cpp")
-target_link_libraries(test_correctness PRIVATE pmkd fmtlog-static)
+target_link_libraries(test_correctness PRIVATE pmkd)
 
 add_executable (test_save "test/test_save.cpp")
-target_link_libraries(test_save PRIVATE pmkd fmtlog-static)
+target_link_libraries(test_save PRIVATE pmkd)
 
 
 add_executable (test_scale "test/test_scale.cpp")
-target_link_libraries(test_scale PRIVATE pmkd fmtlog-static)
+target_link_libraries(test_scale PRIVATE pmkd)
 
 
 add_executable (test_opt "test/test_opt.cpp")
-target_link_libraries(test_opt PRIVATE pmkd fmtlog-static)
+target_link_libraries(test_opt PRIVATE pmkd)
+
+
+add_executable (test_findbin_perf "test/test_findbin_perf.cpp")
+target_link_libraries(test_findbin_perf PRIVATE pmkd)
+
+
+add_executable (test_insert "test/test_insert.cpp")
+target_link_libraries(test_insert PRIVATE pmkd)
 
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET pmkd PROPERTY CXX_STANDARD 20)
   set_property(TARGET pmkd-cpu PROPERTY CXX_STANDARD 20)
 endif()
-
+ 
 # TODO: 如有需要，请添加测试并安装目标。

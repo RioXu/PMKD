@@ -1,7 +1,8 @@
 #pragma once
-#include <parlay/sequence.h>
+#include <deque>
 #include <vector>
 #include <memory>
+#include <parlay/sequence.h>
 
 #include "node.h"
 #include "query_response.h"
@@ -45,19 +46,28 @@ namespace pmkd {
 
 		void destroy();
 
+		AABB getGlobalBoundary() const { return globalBoundary; }
+
 		size_t primSize() const { return ptNum; }
 
 		size_t primCapacity() const { return pts.capacity(); }
 
-		std::vector<QueryResponse> query(const vector<Query>& queries) const;
+		QueryResponses query(const vector<Query>& queries) const;
 
 		RangeQueryResponses query(const vector<RangeQuery>& queries) const;
 
-		void insert(const vector<vec3f>& pts);
+		void findBin_Experiment(const vector<vec3f>& pts, int version);
 
-		void insert(vector<vec3f>&& pts);
+		void insert(const vector<vec3f>& ptsAdd);
 
-		void remove(const vector<vec3f>& pts);
+		template<typename Range>
+		void firstInsert(Range&& range) {
+			ptNum += range.size();
+			this->pts = range;
+			buildStatic();
+		}
+
+		void remove(const vector<vec3f>& ptsRemove);
 
 		// mixed operations
 		void execute() {}
@@ -67,9 +77,56 @@ namespace pmkd {
 
 		void buildStatic();
 
-		void buildIncrement(size_t offset);
+		void buildIncrement(const vector<vec3f>& ptsAdd);
 
 		void expandStorage(size_t newCapacity);
+	};
+
+	// BufferPool
+	class PMKDTree::BufferPool {
+	private:
+		std::deque<vector<int>> intBuffers;
+		std::deque<vector<mfloat>> floatBuffers;
+		std::deque<vector<vec3f>> vec3fBuffers;
+		std::deque<vector<MortonType>> mortonBuffers;
+
+		template<typename T>
+		std::deque<vector<T>>& getDeque();
+
+		template<>
+		std::deque<vector<int>>& getDeque<int>() { return intBuffers; }
+
+		template<>
+		std::deque<vector<mfloat>>& getDeque<mfloat>() { return floatBuffers; }
+
+		template<>
+		std::deque<vector<vec3f>>& getDeque<vec3f>() { return vec3fBuffers; }
+
+		template<>
+		std::deque<vector<MortonType>>& getDeque<MortonType>() { return mortonBuffers; }
+	public:
+		BufferPool() {}
+		~BufferPool() {}
+
+		template<typename T>
+		vector<T> acquire(size_t size) {
+			auto& dq = getDeque<T>();
+			if (dq.empty()) { return vector<T>(size); }
+			auto& buffer = dq.front();
+			dq.pop_front();
+
+			buffer.resize(size);
+			return std::move(buffer);
+		}
+
+		template<typename T>
+		void release(vector<T>&& buffer) {
+			static_assert(std::is_rvalue_reference_v<decltype(buffer)>);
+
+			if (buffer.empty()) return;
+			auto& dq = getDeque<T>();
+			dq.push_back(buffer);
+		}
 	};
 
 	struct PMKD_PrintInfo {

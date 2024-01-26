@@ -11,12 +11,20 @@ namespace pmkd {
 	struct BuildKernel {
 		static void reduceBoundary(int idx, int size, INPUT(vec3f*) pts, OUTPUT(AABB*) boundary);
 
+		static MortonType calcMortonCode(const vec3f& pt, const AABB& boundary) {
+			vec3f offset = (pt - boundary.ptMin);
+			offset.x /= (boundary.ptMax.x - boundary.ptMin.x);
+			offset.y /= (boundary.ptMax.y - boundary.ptMin.y);
+			offset.z /= (boundary.ptMax.z - boundary.ptMin.z);
+			return MortonType::calculate(offset.x, offset.y, offset.z);
+		}
+
 		static void calcMortonCodes(int idx, int size, INPUT(vec3f*) pts, INPUT(AABB*) gboundary,
 			OUTPUT(MortonType*) morton);
 
 		//static void reorderLeaves(int idx, int size, LeavesRawRepr&& leaves, LeavesRawRepr&& leaves_sorted, int* mapidx);
 
-		static void calcBuildMetrics(int idx, int interiorSize, const AABB& gBoundary, LeavesRawRepr leaves,
+		static void calcBuildMetrics(int idx, int interiorSize, const AABB& gBoundary, INPUT(MortonType*) morton,
 			OUTPUT(int*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
 
 		static void buildInteriors(int idx, int leafSize, const LeavesRawRepr leaves,
@@ -43,11 +51,11 @@ namespace pmkd {
 
 	struct SearchKernel {
 		static void searchPoints(int qIdx, int qSize, const Query* qPts, const vec3f* pts, int leafSize,
-			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary, QueryResponse* resp);
+			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary, bool* exist);
 
 		static void searchPoints_opt(int qIdx, int qSize, const Query* qPts, const vec3f* pts, int leafSize,
 			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary,
-			int rangeL, std::atomic<int>& rangeR, QueryResponse* resp);
+			int rangeL, std::atomic<int>& rangeR, bool* exist);
 
 		static void searchRanges(int qIdx, int qSize, const RangeQuery* qRanges, const vec3f* pts, int leafSize,
 			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary,
@@ -55,7 +63,13 @@ namespace pmkd {
 	};
 
 	struct UpdateKernel {
+		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
+			const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
+			OUTPUT(int*) binIdx);
 
+		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
+			const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
+			OUTPUT(int*) binIdx, std::atomic<int>* maxBin);
 	};
 
 	struct VerifyKernel {

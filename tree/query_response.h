@@ -1,4 +1,6 @@
 #pragma once
+#include <parlay/primitives.h>
+
 #include <common/geometry/aabb.h>
 
 namespace pmkd {
@@ -8,8 +10,31 @@ namespace pmkd {
 	const uint32_t DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE = 30;
 
 
-	struct QueryResponse {
-		bool exist = false;
+	struct QueryResponses {
+		vector<int> queryIdx;
+		vector<bool> exist;
+
+		QueryResponses(size_t size):exist(size, false) {
+			queryIdx = parlay::to_sequence(parlay::iota<int>(size));
+		}
+
+		QueryResponses(const QueryResponses&) = delete;
+		QueryResponses& operator=(const QueryResponses&) = delete;
+
+		QueryResponses(QueryResponses&& other) {
+			queryIdx = std::move(other.queryIdx);
+			exist = std::move(other.exist);
+		}
+
+		QueryResponses& operator=(QueryResponses&& other) {
+			queryIdx = std::move(other.queryIdx);
+			exist = std::move(other.exist);
+			return *this;
+		}
+
+		size_t size() const { return queryIdx.size(); }
+
+		~QueryResponses() {}
 	};
 
 	struct RangeQueryResponse {

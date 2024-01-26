@@ -1,4 +1,8 @@
 #pragma once
+#ifndef M_DEBUG
+#define M_DEBUG
+#endif
+
 #include <fmt/printf.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -19,13 +23,13 @@
 
 #include <common/geometry/aabb.h>
 #include <common/util/utils.h>
+#include <tree/kernel.h>
 #include <pm_kdtree.h>
-
 
 
 using namespace pmkd;
 
-parlay::sequence<vec3f> genPts(size_t n, bool random = true, bool printInfo = true) {
+parlay::sequence<vec3f> genPts(size_t n, bool random = true, bool printInfo = true, AABB bound = AABB()) {
     parlay::sequence<vec3f> points;
     points.reserve(n);
 
@@ -33,17 +37,55 @@ parlay::sequence<vec3f> genPts(size_t n, bool random = true, bool printInfo = tr
     std::mt19937 gen(seed); // 以随机数种子初始化 Mersenne Twister 伪随机数生成器  
     std::normal_distribution<mfloat> dis(0.0, 5.0);
 
-    // 生成n个随机点  
-    for (int i = 0; i < n; ++i) {
-        points.emplace_back(dis(gen), dis(gen), dis(gen));
+    // 生成n个随机点
+    if (bound == AABB()) {
+        for (int i = 0; i < n; ++i) {
+            vec3f pt(dis(gen), dis(gen), dis(gen));
+            points.emplace_back(pt);
+        }
     }
+    else {
+        for (int i = 0; i < n; ++i) {
+            vec3f pt(dis(gen), dis(gen), dis(gen));
+            while (!bound.include(pt)) {
+                pt = vec3f(dis(gen), dis(gen), dis(gen));
+            }
+            points.emplace_back(pt);
+        }
+    }
+
     if (printInfo) {
         for (const auto& pt : points) {
-            fmt::printf("(%.3f, %.3f, %.3f) ", pt.x, pt.y, pt.z);
+            fmt::printf("(%.4f, %.4f, %.4f) ", pt.x, pt.y, pt.z);
         }
         fmt::printf("\n");
     }
     return points;
+}
+
+parlay::sequence<vec3f> sortPts(const parlay::sequence<vec3f>& pts, AABB bound = AABB()) {
+    size_t size = pts.size();
+    if (pts.empty()) return {};
+    if (bound == AABB()) {
+        bound = reduce<AABB>(pts, MergeOp());
+    }
+
+    auto primIdx = parlay::tabulate(size, [](int i) {return i;});
+    vector<MortonType> morton(size);
+
+    // calculate morton code
+    parlay::parallel_for(0, size,
+        [&](size_t i) { BuildKernel::calcMortonCodes(i, size, pts.data(), &bound, morton.data()); }
+    );
+
+    // reorder leaves using morton code
+    // note: there are multiple sorting algorithms to choose from
+    parlay::integer_sort_inplace(
+        primIdx,
+        [&](const auto& idx) {return morton[idx].code;});
+
+    auto ptsSorted = parlay::tabulate(size, [&](int i) {return pts[primIdx[i]];});
+    return ptsSorted;
 }
 
 parlay::sequence<AABB> genRanges(size_t n, bool random = true, bool printInfo = true) {
@@ -109,27 +151,6 @@ bool isContentEqual(const RangeQueryResponse& a, const RangeQueryResponse& b) {
     return set_a == set_b;
 }
 
-template<typename F, typename ...Args>
-void mTimer(const std::string& msg, F&& func, Args&&...args) {
-    auto start = std::chrono::high_resolution_clock::now();
-    func(std::forward<Args>(args)...);
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed_time = end - start;
-    fmt::print("{}: {}ms\n", msg, elapsed_time.count() * 1000.0);
-}
-
-template<typename F, typename ...Args>
-void mTimerRepeated(const std::string& msg, int nIter, F&& func, Args&&...args) {
-    double avgTime = 0.0;
-    for (int i = 0; i < nIter;++i) {
-        auto start = std::chrono::high_resolution_clock::now();
-        func(std::forward<Args>(args)...);
-        auto end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> elapsed_time = end - start;
-        avgTime += elapsed_time.count();
-    }
-    fmt::print("{}: {}ms\n", msg, avgTime * 1000.0 / (double)nIter);
-}
 
 template<> struct fmt::formatter<MortonType> {
     formatter<MortonType::value_type> int_formatter;

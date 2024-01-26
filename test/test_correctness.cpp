@@ -9,7 +9,7 @@ int main() {
     auto init = [&]() {
         if (tree) delete tree;
         tree = new PMKDTree();
-        tree->insert(pts);
+        tree->firstInsert(pts);
     };
     mTimer("PMKD构造用时", init);
     printPMKDInfo(*tree);
@@ -25,7 +25,7 @@ int main() {
     int nErr = 0;
     auto ptResp = tree->query(pts);
     for (size_t i = 0; i < ptResp.size(); ++i) {
-        if (!ptResp[i].exist) {
+        if (!ptResp.exist[i]) {
             loge("({:.3f}, {:.3f}, {:.3f}) not found", pts[i].x, pts[i].y, pts[i].z);
             ++nErr;
         }
