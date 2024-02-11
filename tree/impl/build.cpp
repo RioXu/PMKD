@@ -132,6 +132,7 @@ namespace pmkd {
 
 			if (left == 0 && right == leafSize - 1) {
 				//root
+				parentSplitDim[current] = -1;
 				break;
 			}
 			criteria = left != 0 && (right == leafSize - 1 || aid.metrics[left - 1] <= aid.metrics[right]); // 1 if is right child

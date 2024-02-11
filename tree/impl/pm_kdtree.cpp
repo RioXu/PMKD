@@ -19,7 +19,8 @@ namespace pmkd {
 	}
 
 	void PMKDTree::init() {
-		ptNum = 0;
+		isStatic = false;
+		nodeMgr = std::make_unique<NodeMgr>();
 		bufferPool = std::make_unique<BufferPool>();
 		// set config
 		globalBoundary = config.globalBoundary;
@@ -30,38 +31,27 @@ namespace pmkd {
 	void PMKDTree::destroy() {
 		// release stored points
 		// release leaves and interiors
-		ptNum = 0;
+		nodeMgr->clear();
 	}
 
-	void PMKDTree::expandStorage(size_t newCapacity) {
-		leaves.reserve(newCapacity);
+	void PMKDTree::buildStatic(const vector<vec3f>& pts) {
+		size_t ptNum = pts.size();
 
-		// note: allocation of interiors can be async
-		interiors.reserve(newCapacity);
-	}
-
-	void PMKDTree::buildStatic() {
-		if (ptNum == 0) {
-			return;
-		}
 		// get scene boundary
-		//for (size_t i = 0; i < ptNum; ++i) { sceneBoundary.merge(pts[i]); }
 		sceneBoundary = reduce<AABB>(pts, MergeOp());
 		globalBoundary.merge(sceneBoundary);
 
 		// init leaves
+		Leaves leaves;
 		leaves.morton.resize(ptNum);
 		auto primIdx = parlay::to_sequence(parlay::iota<int>(ptNum));
+		leaves.replacedBy.resize(ptNum, 0); // note: can be async
 		//leaves.segOffset.resize(ptNum);
 
 		// init interiors
+		Interiors interiors;
 		// note: allocation of interiors can be async
-		interiors.rangeL.resize(ptNum - 1);
-		interiors.rangeR.resize(ptNum - 1);
-		interiors.splitDim.resize(ptNum - 1);
-		interiors.splitVal.resize(ptNum - 1);
-		interiors.parentSplitDim.resize(ptNum - 1);
-		interiors.parentSplitVal.resize(ptNum - 1);
+		interiors.resize(ptNum - 1);
 
 		// calculate morton code
 		parlay::parallel_for(0, ptNum,
@@ -74,7 +64,6 @@ namespace pmkd {
 		auto mortonSorted = parlay::tabulate(ptNum, [&](int i) {return leaves.morton[primIdx[i]];});
 		leaves.morton = std::move(mortonSorted);
 		auto ptsSorted = parlay::tabulate(ptNum, [&](int i) {return pts[primIdx[i]];});
-		pts = std::move(ptsSorted);
 
 		// calculate metrics
 		auto metrics = bufferPool->acquire<int>(ptNum - 1);
@@ -92,26 +81,28 @@ namespace pmkd {
 		auto leafBuf = bufferPool->acquire<int>(ptNum);
 		BuildAid aid{ metrics.data(),visitCount.data(),innerBuf.data(),leafBuf.data() };
 		// build interior nodes
-		if (config.optimize) {
-			int* range[2] = { interiors.rangeL.data(),interiors.rangeR.data() };
-			parlay::parallel_for(0, ptNum,
-				[&](size_t i) {
-					BuildKernel::buildInteriors_opt(
-						i, ptNum, leaves.getRawRepr(),
-						range, interiors.splitDim.data(), interiors.splitVal.data(),
-						interiors.parentSplitDim.data(), interiors.parentSplitVal.data(),
-						aid);
-				}
-			);
-		}
-		else {
+		// note: the following optimization does not prove better on CPU
+		// may be better on GPU
+		// if (config.optimize) {
+		// 	int* range[2] = { interiors.rangeL.data(),interiors.rangeR.data() };
+		// 	parlay::parallel_for(0, ptNum,
+		// 		[&](size_t i) {
+		// 			BuildKernel::buildInteriors_opt(
+		// 				i, ptNum, leaves.getRawRepr(),
+		// 				range, interiors.splitDim.data(), interiors.splitVal.data(),
+		// 				interiors.parentSplitDim.data(), interiors.parentSplitVal.data(),
+		// 				aid);
+		// 		}
+		// 	);
+		// }
+		// else {
 			parlay::parallel_for(0, ptNum,
 				[&](size_t i) {
 					BuildKernel::buildInteriors(
 						i, ptNum, leaves.getRawRepr(), interiors.getRawRepr(), aid);
 				}
 			);
-		}
+		//}
 
 		// calculate new indices for interiors
 		auto& segLen = leafBuf;
@@ -164,10 +155,19 @@ namespace pmkd {
 
 		interiors.parentSplitDim = std::move(parentSplitDim);
 		interiors.parentSplitVal = std::move(parentSplitVal);
+
+		// fmt::print("add {} points:\n", ptsSorted.size());
+		// for (const auto& pt : ptsSorted) {
+		// 	fmt::printf("(%f, %f, %f) ", pt.x, pt.y, pt.z);
+		// }
+		// fmt::printf("\n");
+		nodeMgr->append(std::move(leaves), std::move(interiors), std::move(ptsSorted));
 	}
 
 	void PMKDTree::buildIncrement(const vector<vec3f>& ptsAdd) {
+		size_t ptNum = primSize();
 		size_t sizeInc = ptsAdd.size();
+		// note: memory allocation can be async
 		auto binIdx = bufferPool->acquire<int>(sizeInc);
 		auto primIdx = bufferPool->acquire<int>(sizeInc);
 		auto morton = bufferPool->acquire<MortonType>(sizeInc);
@@ -199,6 +199,7 @@ namespace pmkd {
 		parlay::parallel_for(0, sizeInc,
 			[&](size_t i) { mortonSorted[i] = morton[primIdx[i]]; }
 		);
+		bufferPool->release<MortonType>(std::move(morton));
 
 		// find leaf bin
 		int maxBin = -1;
@@ -206,30 +207,270 @@ namespace pmkd {
 			[&](size_t i) {
 				UpdateKernel::findLeafBin(
 					i, sizeInc, ptsAddSorted.data(), primSize(),
-					interiors.getRawRepr(), leaves.getRawRepr(), sceneBoundary, binIdx.data());
-			});
+					nodeMgr->getDeviceHandle(), binIdx.data());
+		});
 		maxBin = parlay::reduce(binIdx, parlay::maximum<int>());
 
 		// reset primIdx
 		parlay::parallel_for(0, sizeInc, [&](uint32_t i) {return primIdx[i] = ptNum + i;});
 
+		auto nodeMgrDevice = nodeMgr->getDeviceHandle();
+		auto getMortonCode = [&](int gi) {
+			if (gi >= ptNum) return mortonSorted[gi - ptNum].code;
+
+			int iBatch, _offset;
+			transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
+			return nodeMgrDevice.leavesBatch[iBatch].morton[_offset].code;
+			};
+		
+		// get leafIdx
+		auto leafIdxLeafSorted = parlay::remove_duplicate_integers(binIdx, maxBin + 1);
+		auto leafIdxMortonSorted = parlay::integer_sort(leafIdxLeafSorted, [&](const auto& idx) {return getMortonCode(idx);});
+
+		size_t batchLeafSize = sizeInc + leafIdxLeafSorted.size();
+		auto combinedPrimIdx = bufferPool->acquire<int>(batchLeafSize);
+		auto combinedBinIdx = bufferPool->acquire<int>(batchLeafSize);
+		// parallel merge
+		mergeZip(primIdx, leafIdxMortonSorted, binIdx, combinedPrimIdx, combinedBinIdx,
+			[&](const auto& idx1, const auto& idx2) {
+				return getMortonCode(idx1) < getMortonCode(idx2);
+		});
+
+		// allocate memory for final insertion
+		// note: can be async
+		Leaves leaves;
+		leaves.morton.resize(batchLeafSize);
+		leaves.treeLocalRangeR.resize(batchLeafSize);
+		leaves.derivedFrom.resize(batchLeafSize);
+		leaves.replacedBy.resize(batchLeafSize);
+
+		Interiors interiors;
+		interiors.resize(batchLeafSize-1);
+
+		auto ptsAddFinal = bufferPool->acquire<vec3f>(batchLeafSize);
+		auto treeLocalRangeL = bufferPool->acquire<int>(batchLeafSize);
+		auto metrics = bufferPool->acquire<int>(batchLeafSize);
+		auto interiorCount = bufferPool->acquire<int>(leafIdxLeafSorted.size());
+		auto interiorToLeafIdx = bufferPool->acquire<int>(batchLeafSize - leafIdxLeafSorted.size());
+
+		auto& tempIdx = primIdx;
+		tempIdx.resize(batchLeafSize);
+		auto& finalPrimIdx = binIdx;
+		finalPrimIdx.resize(batchLeafSize);
+
+		parlay::parallel_for(0, batchLeafSize,
+            [&](size_t i) { tempIdx[i] = i; }
+		);
+		// sort by combinedBinIdx
+		parlay::stable_integer_sort_inplace(
+			tempIdx,
+			[&](const auto& idx) {return static_cast<uint32_t>(combinedBinIdx[idx]);});
+
+		parlay::parallel_for(0, batchLeafSize,
+            [&](size_t i) { finalPrimIdx[i] = combinedPrimIdx[tempIdx[i]]; }
+		);
+		bufferPool->release<int>(std::move(combinedPrimIdx));
+
+		// set derivedFrom
+		auto& finalBinIdx = leaves.derivedFrom;
+		parlay::parallel_for(0, batchLeafSize,
+			[&](size_t i) { finalBinIdx[i] = combinedBinIdx[tempIdx[i]]; }
+		);
+		bufferPool->release<int>(std::move(tempIdx));
+		bufferPool->release<int>(std::move(combinedBinIdx));
+
+		// set final points to add
+		parlay::parallel_for(0, batchLeafSize,
+			[&](size_t i) {
+				int gi = finalPrimIdx[i];
+				if (gi >= ptNum) ptsAddFinal[i] = ptsAddSorted[gi - ptNum];
+				else {
+					int iBatch, _offset;
+					transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
+					ptsAddFinal[i] = nodeMgrDevice.ptsBatch[iBatch][_offset];
+				}
+			}
+		);
+		bufferPool->release<vec3f>(std::move(ptsAddSorted));
+
+		// set final mortons to add
+		parlay::parallel_for(0, batchLeafSize,
+			[&](size_t i) {
+				int gi = finalPrimIdx[i];
+				if (gi >= ptNum) leaves.morton[i] = mortonSorted[gi - ptNum];
+				else {
+					int iBatch, _offset;
+					transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
+					leaves.morton[i] = nodeMgrDevice.leavesBatch[iBatch].morton[_offset];
+				}
+			}
+		);
+		bufferPool->release<int>(std::move(finalPrimIdx));
+		bufferPool->release<MortonType>(std::move(mortonSorted));
+
+		// set bin count
+		parlay::parallel_for(0, leafIdxLeafSorted.size(), [&](size_t i) {
+			const auto& [_l, _r] = std::equal_range(finalBinIdx.begin(), finalBinIdx.end(), leafIdxLeafSorted[i]);
+			interiorCount[i] = _r - _l - 1;
+		});
+		parlay::scan_inplace(interiorCount);
+
+		// set replacedBy
+		parlay::parallel_for(0, leafIdxLeafSorted.size(), [&](size_t i) {
+			int gi = leafIdxLeafSorted[i];
+			int iBatch, _offset;
+			transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
+			MASSERT(nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset] > 0);
+			nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset] = ptNum + interiorCount[i] + i;
+		});
+
+		// set tree local range
+		parlay::parallel_for(0, batchLeafSize, [&](size_t i) {
+			int j = std::lower_bound(leafIdxLeafSorted.begin(), leafIdxLeafSorted.end(), finalBinIdx[i]) - leafIdxLeafSorted.begin();
+			treeLocalRangeL[i] = interiorCount[j] + j;
+			leaves.treeLocalRangeR[i] = j < leafIdxLeafSorted.size() - 1 ? interiorCount[j + 1] + j + 1 : batchLeafSize;
+		});
+
 		// calc metrics
+		parlay::parallel_for(0, interiorToLeafIdx.size(), [&](size_t i) {
+			int j = std::upper_bound(interiorCount.begin(), interiorCount.end(), i) - interiorCount.begin() - 1;
+			interiorToLeafIdx[i] = i + j;
+		});
+
+		parlay::parallel_for(0, interiorToLeafIdx.size(), [&](size_t i) {
+			DynamicBuildKernel::calcBuildMetrics(i, interiorToLeafIdx.size(), globalBoundary,
+			leaves.morton.data(), interiorToLeafIdx.data(), 
+			metrics.data(), interiors.splitDim.data(), interiors.splitVal.data());
+		});
+
+		//---------------------------------------------------------------------
 		// build interiors
 
-		bufferPool->release<int>(std::move(binIdx));
-		bufferPool->release<int>(std::move(primIdx));
-		bufferPool->release<MortonType>(std::move(morton));
-		bufferPool->release<MortonType>(std::move(mortonSorted));
-		bufferPool->release<vec3f>(std::move(ptsAddSorted));
+		auto visitCount = std::vector<AtomicCount>(batchLeafSize - 1);
+		auto innerBuf = bufferPool->acquire<int>(batchLeafSize - 1);
+		auto leafBuf = bufferPool->acquire<int>(batchLeafSize);
+		BuildAid aid{ metrics.data(),visitCount.data(),innerBuf.data(),leafBuf.data() };
+		// build interior nodes
+		// note: the following optimization does not prove better on CPU
+		// may be better on GPU
+		// if (config.optimize) {
+		// 	int* range[2] = { interiors.rangeL.data(),interiors.rangeR.data() };
+		// 	parlay::parallel_for(0, batchLeafSize,
+		// 		[&](size_t i) {
+		// 			BuildKernel::buildInteriors_opt(
+		// 				i, batchLeafSize, leaves.getRawRepr(),
+		// 				range, interiors.splitDim.data(), interiors.splitVal.data(),
+		// 				interiors.parentSplitDim.data(), interiors.parentSplitVal.data(),
+		// 				aid);
+		// 		}
+		// 	);
+		// }
+		// else {
+		parlay::parallel_for(0, batchLeafSize,
+			[&](size_t i) {
+				DynamicBuildKernel::buildInteriors(
+					i, batchLeafSize, treeLocalRangeL.data(), leaves.getRawRepr(), interiors.getRawRepr(), aid);
+			}
+		);
+		//}
+		bufferPool->release<int>(std::move(treeLocalRangeL));
+
+		// calculate new indices for interiors
+		auto& segLen = leafBuf;
+		leaves.segOffset = parlay::scan(segLen).first;
+
+		auto& mapidx = metrics;
+		parlay::parallel_for(0, interiorCount.size()-1, [&](size_t i) {
+			DynamicBuildKernel::interiorMapIdxInit(i, interiorCount.size(), batchLeafSize, interiorCount.data(), mapidx.data());
+		});
+		bufferPool->release<int>(std::move(interiorCount));
+
+		parlay::parallel_for(0, interiorToLeafIdx.size(),
+			[&](size_t i) {
+				DynamicBuildKernel::calcInteriorNewIdx(
+					i, interiorToLeafIdx.size(), interiorToLeafIdx.data(),
+					leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen, aid.leftLeafCount, mapidx.data());
+			}
+		);
+		bufferPool->release<int>(std::move(interiorToLeafIdx));
+
+		// reorder interiors
+		auto& rangeL = innerBuf;
+		auto& rangeR = leafBuf;
+		rangeR.resize(batchLeafSize - 1);
+		auto splitDim = bufferPool->acquire<int>(batchLeafSize - 1);
+		auto splitVal = bufferPool->acquire<mfloat>(batchLeafSize - 1);
+		parlay::parallel_for(0, batchLeafSize - 1,
+			[&](size_t i) {
+				DynamicBuildKernel::reorderInteriors_step1(
+					i, batchLeafSize - 1, interiors.getRawRepr(), mapidx.data(),
+					rangeL.data(), rangeR.data(),
+					splitDim.data(), splitVal.data());
+			}
+		);
+		bufferPool->release<int>(std::move(interiors.rangeL));
+		bufferPool->release<int>(std::move(interiors.rangeR));
+		bufferPool->release<int>(std::move(interiors.splitDim));
+		bufferPool->release<mfloat>(std::move(interiors.splitVal));
+
+		interiors.rangeL = std::move(rangeL);
+		interiors.rangeR = std::move(rangeR);
+		interiors.splitDim = std::move(splitDim);
+		interiors.splitVal = std::move(splitVal);
+
+		auto parentSplitDim = bufferPool->acquire<int>(batchLeafSize - 1);
+		auto parentSplitVal = bufferPool->acquire<mfloat>(batchLeafSize - 1);
+		parlay::parallel_for(0, batchLeafSize - 1,
+			[&](size_t i) {
+				DynamicBuildKernel::reorderInteriors_step2(
+					i, batchLeafSize - 1, interiors.getRawRepr(), mapidx.data(),
+					parentSplitDim.data(), parentSplitVal.data());
+			}
+		);
+		bufferPool->release<int>(std::move(interiors.parentSplitDim));
+		bufferPool->release<mfloat>(std::move(interiors.parentSplitVal));
+		bufferPool->release<int>(std::move(mapidx));
+
+		interiors.parentSplitDim = std::move(parentSplitDim);
+		interiors.parentSplitVal = std::move(parentSplitVal);
+
+		// parlay::parallel_for(0, interiorCount.size(), [&](size_t i) {
+		// 	DynamicBuildKernel::setSubtreeRootParentSplit(i, interiorCount.size(),
+		// 	interiorCount.data(), leaves.derivedFrom.data(), nodeMgrDevice, globalBoundary,
+		// 	interiors.parentSplitDim.data(), interiors.parentSplitVal.data());
+		// });
+		//bufferPool->release<int>(std::move(interiorCount));
+
+		// fmt::print("splitDim:\n{}\n", interiors.splitDim);
+		// fmt::print("splitVal:\n{}\n", interiors.splitVal);
+
+		// fmt::print("add {} points:\n", ptsAddFinal.size());
+		// for (const auto& pt : ptsAddFinal) {
+		// 	fmt::printf("(%f, %f, %f) ", pt.x, pt.y, pt.z);
+		// }
+		// fmt::printf("\n");
+		nodeMgr->append(std::move(leaves), std::move(interiors), std::move(ptsAddFinal));
 	}
 
-	
 	PMKD_PrintInfo PMKDTree::print(bool verbose) const {
+		if (isStatic) return printStatic(verbose);
+		return printDynamic(verbose);
+	}
+
+	PMKD_PrintInfo PMKDTree::printStatic(bool verbose) const {
+		assert(isStatic);
+
+		size_t ptNum = primSize();
+
 		PMKD_PrintInfo info;
-		info.leafNum = ptNum;
+		info.leafNum = primSize();
 		if (ptNum == 0) return info;
 
-		using PNode = std::pair<int, int>;
+		auto hostNodeMgr = nodeMgr->copyToHost();
+		const auto& leaves = hostNodeMgr.leavesBatch[0];
+		const auto& interiors = hostNodeMgr.interiorsBatch[0];
+
+		using PNode = std::pair<int, int>;  // <leafBin, globalIdx>, where leaf's globalIdx += ptNum
 
 		auto left = [&](const PNode& pnode) ->PNode {
 			auto& [leafBinIdx, node] = pnode;
@@ -301,13 +542,203 @@ namespace pmkd {
 
 		if (verbose) {
 			// get primIdx
-			info.leafPoints.resize(ptNum);
-			//parlay::parallel_for(0, ptNum, [&](size_t i) { info.leafPoints[i] = pts[leaves.primIdx[i]];});
-			info.leafPoints.assign(pts.begin(), pts.end());
+			info.leafPoints = getStoredPoints();
 			info.splitDim.assign(interiors.splitDim.begin(), interiors.splitDim.end());
 			info.splitVal.assign(interiors.splitVal.begin(), interiors.splitVal.end());
 		}
 		return info;
+	}
+
+	PMKD_PrintInfo PMKDTree::printDynamic(bool verbose) const {
+		assert(!isStatic);
+
+		size_t ptNum = primSize();
+
+		PMKD_PrintInfo info;
+		info.leafNum = primSize();
+		if (ptNum == 0) return info;
+
+		auto hostNodeMgr = nodeMgr->copyToHost();
+
+		using PNode = std::pair<int, int>;  // <leafBin, globalIdx>, where leaf's globalIdx += ptNum
+
+		auto left = [&](const PNode& pnode) ->PNode {
+			auto& [leafBinIdx, gIdx] = pnode;
+
+			if (gIdx >= ptNum) return { -1,-1 };  // leaf has no child
+
+			int nextLeafBinIdx = leafBinIdx;
+			while (nextLeafBinIdx < ptNum) {
+				int iBatch, localLeafIdx;
+				transformLeafIdx(nextLeafBinIdx, hostNodeMgr.sizesAcc.data(),
+					hostNodeMgr.leavesBatch.size(), iBatch, localLeafIdx);
+
+				const auto& leaves = hostNodeMgr.leavesBatch[iBatch];
+				const auto& interiors = hostNodeMgr.interiorsBatch[iBatch];
+				int rBound = iBatch > 0 ? leaves.treeLocalRangeR[localLeafIdx] : leaves.size();
+				assert(localLeafIdx < rBound - 1);
+
+				int interiorIdx = iBatch > 0 ? gIdx - hostNodeMgr.sizesAcc[iBatch - 1] : gIdx;
+				if (nextLeafBinIdx != leafBinIdx) {
+					assert(iBatch > 0);
+					interiorIdx = leaves.segOffset[localLeafIdx];
+					int nextGlobal = interiorIdx + hostNodeMgr.sizesAcc[iBatch - 1];
+					return { nextLeafBinIdx,nextGlobal };
+				}
+
+				int R = leaves.segOffset[localLeafIdx + 1];
+				int nextLocal = interiorIdx + 1;  // if interiorIdx < R - 1
+
+				if (interiorIdx < R - 1) {
+					// left child is an nterior node
+					int nextGlobal = iBatch > 0 ? nextLocal + hostNodeMgr.sizesAcc[iBatch - 1] : nextLocal;
+					return { nextLeafBinIdx,nextGlobal };
+				}
+
+				assert(interiorIdx == R - 1);
+				// left child is potentially a leaf
+				uint32_t globalSubstitute = leaves.replacedBy[localLeafIdx];
+				if (globalSubstitute == 0) // this leaf is valid
+					return { nextLeafBinIdx, nextLeafBinIdx + ptNum };
+
+				nextLeafBinIdx = globalSubstitute;
+			}
+			fmt::print("error!\n");
+			assert(0);
+			return { leafBinIdx,gIdx };
+		};
+
+		auto right = [&](const PNode& pnode) ->PNode {
+			auto& [leafBinIdx, gIdx] = pnode;
+
+			if (gIdx >= ptNum) return { -1,-1 };  // leaf has no child
+
+			int nextLeafBinIdx = leafBinIdx;
+			while (nextLeafBinIdx < ptNum) {
+				int iBatch, localLeafIdx;
+				transformLeafIdx(nextLeafBinIdx, hostNodeMgr.sizesAcc.data(),
+					hostNodeMgr.leavesBatch.size(), iBatch, localLeafIdx);
+
+				const auto& leaves = hostNodeMgr.leavesBatch[iBatch];
+				const auto& interiors = hostNodeMgr.interiorsBatch[iBatch];
+
+				int rBound = iBatch > 0 ? leaves.treeLocalRangeR[localLeafIdx] : leaves.size();
+
+				int interiorIdx = iBatch > 0 ? gIdx - hostNodeMgr.sizesAcc[iBatch - 1] : gIdx;
+
+				if (nextLeafBinIdx != leafBinIdx) {
+					assert(iBatch > 0);
+					interiorIdx = leaves.segOffset[localLeafIdx];
+					int nextGlobal = interiorIdx + hostNodeMgr.sizesAcc[iBatch - 1];
+					return { nextLeafBinIdx,nextGlobal };
+				}
+
+				int R = leaves.segOffset[localLeafIdx + 1];
+				assert(interiorIdx < R);
+
+				int nextLocalBin = interiorIdx == R - 1 ?
+					localLeafIdx + 1 : interiors.rangeR[interiorIdx + 1] + 1;
+				int nextLocalIdx = leaves.segOffset[nextLocalBin];
+
+				nextLeafBinIdx += nextLocalBin - localLeafIdx;
+				if (nextLocalBin == rBound - 1) {
+					//assert(nextLocalBin == nextLocalIdx);
+					// right child is potentially a leaf
+					uint32_t globalSubstitute = leaves.replacedBy[nextLocalBin];
+
+					if (globalSubstitute == 0) // this leaf is valid
+						return { nextLeafBinIdx, nextLeafBinIdx + ptNum };
+
+					// leaf is replaced
+					nextLeafBinIdx = globalSubstitute;
+					continue;
+				}
+				else if (nextLocalIdx == leaves.segOffset[nextLocalBin + 1]) {
+					// right child is potentially a leaf
+					uint32_t globalSubstitute = leaves.replacedBy[nextLocalBin];
+
+					if (globalSubstitute == 0) // this leaf is valid
+						return { nextLeafBinIdx, nextLeafBinIdx + ptNum };
+
+					// leaf is replaced
+					nextLeafBinIdx = globalSubstitute;
+					continue;
+				}
+				// right child is not a leaf
+				int nextGlobal = iBatch > 0 ? nextLocalIdx + hostNodeMgr.sizesAcc[iBatch - 1] : nextLocalIdx;
+				return { nextLeafBinIdx,nextGlobal };
+			}
+			fmt::print("error!\n");
+			assert(0);
+			return { leafBinIdx,gIdx };
+			};
+
+		auto isInvalid = [](const PNode& node) {return node.first == -1;};
+
+		std::vector<PNode> stk;
+		// inorder traversal
+		PNode p{ 0,0 };
+		while (!isInvalid(p) || !stk.empty()) {
+			if (!isInvalid(p)) {
+				stk.push_back(p);
+				p = left(p);
+			}
+			else {
+				p = stk[stk.size() - 1];
+				stk.pop_back();
+				info.inorderTraversal.push_back(p.second);
+				p = right(p);
+			}
+		}
+
+		// preorder traversal
+		stk.clear();
+		stk.push_back({ 0,0 });
+		while (!stk.empty()) {
+			p = stk[stk.size() - 1];
+			stk.pop_back();
+			info.preorderTraversal.push_back(p.second);
+
+			auto r = right(p);
+			if (!isInvalid(r)) stk.push_back(r);
+
+			auto l = left(p);
+			if (!isInvalid(l)) stk.push_back(l);
+		}
+		assert(info.preorderTraversal.size() == info.inorderTraversal.size());
+
+		for (size_t i = 0;i<hostNodeMgr.leavesBatch.size();++i) {
+			const auto& leaves = hostNodeMgr.leavesBatch[i];
+			// get leaf mortons
+			info.leafMortons.insert(info.leafMortons.end(), leaves.morton.begin(), leaves.morton.end());
+			if (verbose) {
+				info.leafPoints.insert(info.leafPoints.end(), hostNodeMgr.ptsBatch[i].begin(), hostNodeMgr.ptsBatch[i].end());
+
+				const auto& interiors = hostNodeMgr.interiorsBatch[i];
+				info.splitDim.insert(info.splitDim.end(), interiors.splitDim.begin(), interiors.splitDim.end());
+				info.splitDim.push_back(-1);
+
+				info.splitVal.insert(info.splitVal.end(), interiors.splitVal.begin(), interiors.splitVal.end());
+                info.splitVal.push_back(0);
+			}
+		}
+
+		// get morton metrics
+		// info.metrics.resize(ptNum - 1);
+		// parlay::parallel_for(0, ptNum - 1,
+		// 	[&](size_t i) {
+		// 		info.metrics[i] = MortonType::calcMetric(info.leafMortons[i], info.leafMortons[i + 1]);
+		// 	}
+		// );
+		return info;
+	}
+
+
+	std::vector<vec3f> PMKDTree::getStoredPoints() const {
+		auto dpts = nodeMgr->flattenPoints();
+
+		std::vector<vec3f> pts(dpts.begin(), dpts.end());
+		return pts;
 	}
 
 	QueryResponses PMKDTree::query(const vector<Query>& queries) const {
@@ -316,6 +747,8 @@ namespace pmkd {
 		size_t nq = queries.size();
 		QueryResponses responses(nq);
 
+		vector<Query> queriesSorted;
+		const Query* target = queries.data();
 		// sort queries to improve cache friendlyness
 		if (config.optimize) {
 			vector<MortonType> morton(nq);
@@ -326,24 +759,27 @@ namespace pmkd {
 			// note: there are multiple sorting algorithms to choose from
 			parlay::integer_sort_inplace(
 				responses.queryIdx, [&](const auto& idx) {return morton[idx].code;});
-			auto queriesSorted = parlay::tabulate(nq, [&](int i) {return queries[responses.queryIdx[i]];});
+			queriesSorted = parlay::tabulate(nq, [&](int i) {return queries[responses.queryIdx[i]];});
+			target = queriesSorted.data();
+		}
+
+		if (isStatic) {
+			assert(nodeMgr->numBatches() == 1);
+			const auto& leaves = nodeMgr->getLeaves(0);
+			const auto& interiors = nodeMgr->getInteriors(0);
 
 			parlay::parallel_for(0, nq,
 				[&](size_t i) {
 					SearchKernel::searchPoints(
-						i, nq, queriesSorted.data(), pts.data(), ptNum,
+						i, nq, target, nodeMgr->getPtsBatch(0).data(), primSize(),
 						interiors.getRawRepr(), leaves.getRawRepr(), sceneBoundary, responses.exist.data());
 				}
 			);
 		}
 		else {
-			parlay::parallel_for(0, nq,
-				[&](size_t i) {
-					SearchKernel::searchPoints(
-						i, nq, queries.data(), pts.data(), ptNum,
-						interiors.getRawRepr(), leaves.getRawRepr(), sceneBoundary, responses.exist.data());
-				}
-			);
+			parlay::parallel_for(0, nq, [&](size_t i) {
+				SearchKernel::searchPoints(i,nq,target,nodeMgr->getDeviceHandle(),primSize(),sceneBoundary, responses.exist.data());
+			});
 		}
 
 		return responses;
@@ -355,23 +791,65 @@ namespace pmkd {
 		size_t nq = queries.size();
 		RangeQueryResponses responses(nq);
 
+		vector<RangeQuery> queriesSorted;
+		const RangeQuery* target = queries.data();
 		// note: sort queries as an optimization
-		if (config.optimize) {}
+		if (config.optimize) {
+			vector<vec3f> centers(nq);
+			parlay::parallel_for(0, nq,
+                [&](size_t i) { centers[i] = queries[i].center(); }
+			);
 
-		parlay::parallel_for(0, nq,
-			[&](size_t i) {
-				SearchKernel::searchRanges(
-					i, nq, queries.data(), pts.data(), ptNum,
-					interiors.getRawRepr(), leaves.getRawRepr(),
-					sceneBoundary, responses.getRawRepr());
-			}
-		);
+			vector<MortonType> morton(nq);
+
+			parlay::parallel_for(0, nq,
+				[&](size_t i) { BuildKernel::calcMortonCodes(i, nq, centers.data(), &globalBoundary, morton.data()); }
+			);
+			// note: there are multiple sorting algorithms to choose from
+			parlay::integer_sort_inplace(
+				responses.queryIdx, [&](const auto& idx) {return morton[idx].code;});
+			queriesSorted = parlay::tabulate(nq, [&](int i) {return queries[responses.queryIdx[i]];});
+			target = queriesSorted.data();
+		}
+
+		if (isStatic) {
+			assert(nodeMgr->numBatches() == 1);
+			const auto& leaves = nodeMgr->getLeaves(0);
+			const auto& interiors = nodeMgr->getInteriors(0);
+
+			parlay::parallel_for(0, nq,
+				[&](size_t i) {
+					SearchKernel::searchRanges(
+						i, nq, target, nodeMgr->getPtsBatch(0).data(), primSize(),
+						interiors.getRawRepr(), leaves.getRawRepr(),
+						sceneBoundary, responses.getRawRepr());
+				}
+			);
+		}
+		else {
+			parlay::parallel_for(0, nq, [&](size_t i) {
+				SearchKernel::searchRanges(i, nq, target,
+				nodeMgr->getDeviceHandle(), primSize(), sceneBoundary,
+				responses.getRawRepr());
+			});
+		}
+
 		return responses;
 	}
 
 	void PMKDTree::insert(const vector<vec3f>& ptsAdd) {
 		if (ptsAdd.empty()) return;
+
+		isStatic = false;
 		buildIncrement(ptsAdd);
+	}
+
+	void PMKDTree::firstInsert(const vector<vec3f>& pts) {
+		if (pts.empty()) return;
+
+		destroy();
+		isStatic = true;
+		buildStatic(pts);
 	}
 
 	void PMKDTree::remove(const vector<vec3f>& ptsRemove) {}

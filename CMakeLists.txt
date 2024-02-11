@@ -6,7 +6,7 @@ cmake_minimum_required (VERSION 3.14)
 project ("pmkd-cpu")
 
 # 架构和指令集信息
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=tigerlake -mavx")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx")
 # 设置第三方库的路径
 set(EXTERNAL_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/external")
 # 设置parlay并行线程数
@@ -35,10 +35,6 @@ add_library (pmkd STATIC ${SOURCES_TREE})
 set(PMKD_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/tree")
 target_include_directories(pmkd PUBLIC ${PMKD_INCLUDE_DIR})
 target_link_libraries(pmkd PUBLIC parlay fmtlog-static)
-
-# main
-add_executable (pmkd-cpu "${CMAKE_SOURCE_DIR}/parkd-cpu.cpp")
-target_link_libraries(pmkd-cpu PRIVATE pmkd)
 
 # tests
 add_executable (test_reduce "test/test_reduce.cpp")
@@ -70,7 +66,6 @@ target_link_libraries(test_insert PRIVATE pmkd)
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET pmkd PROPERTY CXX_STANDARD 20)
-  set_property(TARGET pmkd-cpu PROPERTY CXX_STANDARD 20)
 endif()
  
 # TODO: 如有需要，请添加测试并安装目标。

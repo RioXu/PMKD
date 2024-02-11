@@ -14,6 +14,8 @@ namespace pmkd {
 			:ptMin(vec3f(minx, miny, minz)),
 			ptMax(vec3f(maxx, maxy, maxz)) {}
 
+		inline vec3f center() const { return (ptMin + ptMax) * 0.5f; }
+
 		inline void merge(const AABB& b) {
 			ptMin = vec3f(fmin(ptMin.x, b.ptMin.x), fmin(ptMin.y, b.ptMin.y), fmin(ptMin.z, b.ptMin.z));
 			ptMax = vec3f(fmax(ptMax.x, b.ptMax.x), fmax(ptMax.y, b.ptMax.y), fmax(ptMax.z, b.ptMax.z));

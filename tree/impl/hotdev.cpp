@@ -7,7 +7,7 @@
 #include <tree/kernel.h>
 
 namespace pmkd {
-    void PMKDTree::findBin_Experiment(const vector<vec3f>& ptsAdd, int version) {
+    void PMKDTree::findBin_Experiment(const vector<vec3f>& ptsAdd, int version, bool print) {
         // v1: findBin前不排序，对bin用比较型sort
         // v2：findBin前排序，对bin用radix sort
         // v3：findBin前排序，对bin用比较型sort
@@ -15,6 +15,10 @@ namespace pmkd {
 
         // 结果：v1最慢，v2和v3相仿
         // 占比最大部分为第一次排序primIdx，排序ptsAdd和执行findBin，总计占超80%用时
+        auto& leaves = nodeMgr->getLeaves(0);
+        auto& interiors = nodeMgr->getInteriors(0);
+        size_t ptNum = nodeMgr->numLeaves();
+
         size_t sizeInc = ptsAdd.size();
         auto binIdx = bufferPool->acquire<int>(sizeInc);
 
@@ -58,7 +62,8 @@ namespace pmkd {
             [&](size_t i) {
                     UpdateKernel::findLeafBin(
                         i, sizeInc, targetPts, primSize(),
-                        interiors.getRawRepr(), leaves.getRawRepr(), sceneBoundary, binIdx.data());
+                        interiors.getRawRepr(), leaves.getRawRepr(),
+                        binIdx.data());
                 });
         maxBin = parlay::reduce(binIdx, parlay::maximum<int>());
             });
@@ -91,31 +96,35 @@ namespace pmkd {
                 [&](const auto& idx1, const auto& idx2) {return binIdx[idx1 - offset] < binIdx[idx2 - offset];});
         }
         else if (version == 4) {
-            MortonType* mortonArr[2] = { leaves.morton.data(), mortonSorted.data() };
+            const MortonType* mortonArr[2] = { leaves.morton.data(), mortonSorted.data() };
             auto getMorton = [&](int idx) {
                 return mortonArr[idx / ptNum][idx % ptNum];
             };
 
             vector<int> binCount;
             vector<int> leafIdx;
-            mTimer("统计binCount", [&] {
-                binCount = parlay::histogram_by_index(binIdx, maxBin + 1);
-                parlay::parallel_for(0, binCount.size(), [&](size_t i) {
-                    if (binCount[i] > 0) binCount[i]++;
-                });
-            });
-            // mTimer("统计leafIdx", [&] {
-            //     leafIdx.reserve(sizeInc);
-            //     for (size_t i = 0; i < binCount.size(); i++) {
-            //         if (binCount[i] > 0) {
-            //             binCount[i]++;
-            //             leafIdx.push_back(i);
-            //         }
-            //     }
-            //     });
+
+
             mTimer("统计leafIdx", [&] {
                 leafIdx = parlay::remove_duplicate_integers(binIdx, maxBin + 1);
             });
+
+            // vector<int> binIdxSorted;
+            // mTimer("统计binCount", [&] {
+            //     binIdxSorted = parlay::integer_sort(binIdx, [](const auto& idx) { return static_cast<uint32_t>(idx);});
+            //     binCount.resize(leafIdx.size());
+            //     parlay::parallel_for(0, leafIdx.size(), [&](size_t i) {
+            //         const auto& [_l, _r] = std::equal_range(binIdxSorted.begin(), binIdxSorted.end(), leafIdx[i]);
+            //         binCount[i] = (_r - _l) + 1;
+            //     });
+            // });
+
+            // mTimer("统计binCount", [&] {
+            //     binCount = parlay::histogram_by_index(binIdx, maxBin + 1);
+            //     parlay::parallel_for(0, binCount.size(), [&](size_t i) {
+            //         if (binCount[i] > 0) binCount[i]++;
+            //     });
+            // });
 
             vector<int> combinedPrimIdx(sizeInc + leafIdx.size());
             vector<int> combinedBinIdx(sizeInc + leafIdx.size());
@@ -125,26 +134,46 @@ namespace pmkd {
             });
        
             auto tempIdx = parlay::tabulate(combinedPrimIdx.size(), [&](int i) {return i;});
+            vector<int> finalBinIdx;
             mTimer("根据合并binIdx排序", [&] {
                 parlay::stable_integer_sort_inplace(
                     tempIdx,
                     [&](const auto& idx) {return static_cast<uint32_t>(combinedBinIdx[idx]);});
+                
+                finalBinIdx = parlay::tabulate(combinedPrimIdx.size(), [&](int i) {return combinedBinIdx[tempIdx[i]];});
+            });
+
+            // note: there is a faster top-down parallel algorithm
+            // not sure how to apply it to GPU
+            mTimer("统计binCount", [&] {
+                binCount.resize(leafIdx.size());
+                parlay::parallel_for(0, leafIdx.size(), [&](size_t i) {
+                    const auto& [_l, _r] = std::equal_range(finalBinIdx.begin() + i, finalBinIdx.end(), leafIdx[i]);
+                    binCount[i] = (_r - _l);
+                });
             });
 
             // check correctness, not for performance comparison
-            // auto finalBinIdx = parlay::tabulate(combinedPrimIdx.size(), [&](int i) {return combinedBinIdx[tempIdx[i]];});
-            // auto finalMorton = parlay::tabulate(combinedPrimIdx.size(), [&](int i) {
-            //     int j = combinedPrimIdx[tempIdx[i]];
-            //     return getMorton(j).code;
-            // });
-            // fmt::print("maxBin: {}\n", maxBin);
-            // fmt::print("primIdx:\n{}\n", primIdx);
-            // fmt::print("leafIdx:\n{}\n", leafIdx);
-            // fmt::print("binIdx:\n{}\n", binIdx);
-            // fmt::print("combinedPrimIdx:\n{}\n", combinedPrimIdx);
-            // fmt::print("combinedBinIdx:\n{}\n", combinedBinIdx);
-            // fmt::print("finalBinIdx:\n{}\n", finalBinIdx);
-            // fmt::print("finalMorton:\n{}\n", finalMorton);
+            if (print) {
+                auto combinedPrimMorton = parlay::tabulate(combinedPrimIdx.size(), [&](int i) {
+                    int j = combinedPrimIdx[i];
+                    return getMorton(j).code;
+                    });
+                auto finalMorton = parlay::tabulate(combinedPrimIdx.size(), [&](int i) {
+                    int j = combinedPrimIdx[tempIdx[i]];
+                    return getMorton(j).code;
+                    });
+                fmt::print("maxBin: {}\n", maxBin);
+                fmt::print("primIdx:\n{}\n", primIdx);
+                fmt::print("leafIdx:\n{}\n", leafIdx);
+                fmt::print("binIdx:\n{}\n", binIdx);
+                fmt::print("binCount:\n{}\n", binCount);
+                fmt::print("combinedPrimIdx:\n{}\n", combinedPrimIdx);
+                fmt::print("combinedBinIdx:\n{}\n", combinedBinIdx);
+                fmt::print("combinedPrimMorton:\n{}\n", combinedPrimMorton);
+                fmt::print("finalBinIdx:\n{}\n", finalBinIdx);
+                fmt::print("finalMorton:\n{}\n", finalMorton);
+            }
         }
 
         bufferPool->release(std::move(binIdx));

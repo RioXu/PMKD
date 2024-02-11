@@ -5,8 +5,8 @@
 #include "query_response.h"
 
 namespace pmkd {
-#define INPUT(ptr_t) const ptr_t __restrict__
-#define OUTPUT(ptr_t) ptr_t __restrict__
+#define INPUT(ptr_t) const ptr_t __restrict_arr
+#define OUTPUT(ptr_t) ptr_t __restrict_arr
 
 	struct BuildKernel {
 		static void reduceBoundary(int idx, int size, INPUT(vec3f*) pts, OUTPUT(AABB*) boundary);
@@ -47,29 +47,60 @@ namespace pmkd {
 			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
 	};
 
+	
+	struct DynamicBuildKernel {
+		static void calcBuildMetrics(int idx, int interiorRealSize, const AABB& gBoundary,
+			INPUT(MortonType*) morton, INPUT(int*) interiorToLeafIdx,
+			OUTPUT(int*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
+
+		static void buildInteriors(int idx, int batchLeafSize, INPUT(int*) localRangeL, const LeavesRawRepr leaves,
+			InteriorsRawRepr interiors, BuildAid aid);
+
+		static void interiorMapIdxInit(int idx, int numSubTree, int batchLeafSize, INPUT(int*) interiorCount,
+			OUTPUT(int*) mapidx);
+
+		static void calcInteriorNewIdx(int idx, int interiorRealSize, INPUT(int*) interiorToLeafIdx,
+			const LeavesRawRepr leaves, const InteriorsRawRepr interiors,
+			INPUT(int*) segLen, INPUT(int*) leftLeafCount, OUTPUT(int*) mapidx);
+
+		static void reorderInteriors_step1(int idx, int batchInteriorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+			OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
+
+		static void reorderInteriors_step2(int idx, int batchInteriorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
+
+		static void setSubtreeRootParentSplit(int idx, int numSubTree,
+			INPUT(int*) interiorCount, INPUT(int*) derivedFrom, const NodeMgrDevice nodeMgr, const AABB& gBoundary,
+			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
+	};
 
 
 	struct SearchKernel {
 		static void searchPoints(int qIdx, int qSize, const Query* qPts, const vec3f* pts, int leafSize,
 			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary, bool* exist);
 
-		static void searchPoints_opt(int qIdx, int qSize, const Query* qPts, const vec3f* pts, int leafSize,
-			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary,
-			int rangeL, std::atomic<int>& rangeR, bool* exist);
+		static void searchPoints(int qIdx, int qSize, const Query* qPts, const NodeMgrDevice nodeMgr, int totalLeafSize,
+			const AABB& boundary, bool* exist);
 
 		static void searchRanges(int qIdx, int qSize, const RangeQuery* qRanges, const vec3f* pts, int leafSize,
 			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary,
 			RangeQueryResponsesRawRepr resps);
+
+		static void searchRanges(int qIdx, int qSize, const RangeQuery* qRanges, const NodeMgrDevice nodeMgr, int totalLeafSize,
+			const AABB& boundary, RangeQueryResponsesRawRepr resps);
 	};
 
 	struct UpdateKernel {
 		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
-			const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
+			const InteriorsRawRepr interiors, const LeavesRawRepr leaves,
 			OUTPUT(int*) binIdx);
 
 		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
-			const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
+			const InteriorsRawRepr interiors, const LeavesRawRepr leaves,
 			OUTPUT(int*) binIdx, std::atomic<int>* maxBin);
+
+		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int totalLeafSize,
+			const NodeMgrDevice nodeMgr, OUTPUT(int*) binIdx);
 	};
 
 	struct VerifyKernel {

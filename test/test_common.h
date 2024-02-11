@@ -30,10 +30,12 @@
 using namespace pmkd;
 
 parlay::sequence<vec3f> genPts(size_t n, bool random = true, bool printInfo = true, AABB bound = AABB()) {
+    static unsigned deterministic_seed = 0;
+
     parlay::sequence<vec3f> points;
     points.reserve(n);
 
-    unsigned seed = random ? std::chrono::system_clock::now().time_since_epoch().count() : 0;
+    unsigned seed = random ? std::chrono::system_clock::now().time_since_epoch().count() : deterministic_seed++;
     std::mt19937 gen(seed); // 以随机数种子初始化 Mersenne Twister 伪随机数生成器  
     std::normal_distribution<mfloat> dis(0.0, 5.0);
 
@@ -92,7 +94,7 @@ parlay::sequence<AABB> genRanges(size_t n, bool random = true, bool printInfo = 
     parlay::sequence<AABB> ranges;
     ranges.reserve(n);
 
-    unsigned seed = random ? std::chrono::system_clock::now().time_since_epoch().count() : 0;
+    unsigned seed = random ? std::chrono::system_clock::now().time_since_epoch().count() : 1;
     std::mt19937 gen(seed); // 以随机数种子初始化 Mersenne Twister 伪随机数生成器  
     std::normal_distribution<mfloat> dis1(0.0, 5.0);
     std::uniform_real_distribution<mfloat> dis2(0.1, 3.0);
@@ -168,12 +170,33 @@ template<> struct fmt::formatter<MortonType> {
     }
 };
 
+void printPMKD_Plain(const PMKDTree& tree) {
+    for (size_t i = 0;i < tree.nodeMgr->numBatches();++i) {
+        const auto& leaves = tree.nodeMgr->getLeaves(i);
+        const auto& interiors = tree.nodeMgr->getInteriors(i);
+
+        fmt::print("Batch {}:\n", i);
+        fmt::print("leaves:\n");
+        fmt::print("treeLocalRangeR:\n{}\n", leaves.treeLocalRangeR);
+        fmt::print("replacedBy:\n{}\n", leaves.replacedBy);
+        fmt::print("segOffset:\n{}\n", leaves.segOffset);
+        fmt::print("morton:\n{}\n", leaves.morton);
+
+        fmt::print("interiors:\n");
+        fmt::print("rangeL:\n{}\n", interiors.rangeL);
+        fmt::print("rangeR:\n{}\n", interiors.rangeR);
+        fmt::print("splitDim:\n{}\n", interiors.splitDim);
+        fmt::print("splitVal:\n{}\n\n", interiors.splitVal);
+    }
+}
+
 void printPMKDInfo(const PMKDTree& tree) {
     auto treeInfo = tree.print();
     fmt::print("叶节点数：{}\n", treeInfo.leafNum);
     fmt::print("先序：\n{}\n", treeInfo.preorderTraversal);
     fmt::print("中序：\n{}\n", treeInfo.inorderTraversal);
-    fmt::print("指标：\n{}\n", treeInfo.metrics);
+    if (!treeInfo.metrics.empty())
+        fmt::print("指标：\n{}\n", treeInfo.metrics);
     fmt::print("莫顿码：\n");
     for (const auto& morton : treeInfo.leafMortons) {
         std::bitset<sizeof(MortonType) * 8> biRepr(morton.code);

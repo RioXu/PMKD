@@ -52,6 +52,7 @@ namespace pmkd {
 	};
 
 	struct RangeQueryResponses {
+		vector<int> queryIdx;
 		vector<vec3f> buffer;
 		vector<uint32_t> respSize;
 		uint32_t numResponse;
@@ -59,12 +60,16 @@ namespace pmkd {
 
 		RangeQueryResponses(uint32_t num, uint32_t capacityPerResponse = DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE)
 			:numResponse(num), capPerResponse(capacityPerResponse),
-			buffer(num* capacityPerResponse), respSize(num, 0) {}
+			buffer(num* capacityPerResponse), respSize(num, 0) {
+			
+			queryIdx = parlay::to_sequence(parlay::iota<int>(num));
+		}
 
 		RangeQueryResponses(const RangeQueryResponses&) = delete;
 		RangeQueryResponses& operator=(const RangeQueryResponses&) = delete;
 
 		RangeQueryResponses(RangeQueryResponses&& other) {
+			queryIdx = std::move(other.queryIdx);
 			buffer = std::move(other.buffer);
 			respSize = std::move(other.respSize);
 			numResponse = other.numResponse;
@@ -72,6 +77,7 @@ namespace pmkd {
 		}
 
 		RangeQueryResponses& operator=(RangeQueryResponses&& other) {
+			queryIdx = std::move(other.queryIdx);
 			buffer = std::move(other.buffer);
 			respSize = std::move(other.respSize);
 			numResponse = other.numResponse;
@@ -87,6 +93,7 @@ namespace pmkd {
 			buffer.clear();
 			buffer.resize(numResponse * capPerResponse);
 			respSize.resize(numResponse, 0);
+			queryIdx = parlay::to_sequence(parlay::iota<int>(num));
 		}
 
 		size_t size() const { return respSize.size(); }

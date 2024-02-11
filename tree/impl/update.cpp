@@ -3,14 +3,14 @@
 #include <tree/kernel.h>
 
 namespace pmkd {
+    
     void UpdateKernel::findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
-        const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
+        const InteriorsRawRepr interiors, const LeavesRawRepr leaves,
         OUTPUT(int*) binIdx) {
 
         if (qIdx >= qSize) return;
 
         const vec3f& pt = qPts[qIdx];
-        if (!boundary.include(pt)) return;
 
         // do sprouting
         int L = 0, R = 0;
@@ -61,13 +61,12 @@ namespace pmkd {
     }
 
     void UpdateKernel::findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
-        const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
+        const InteriorsRawRepr interiors, const LeavesRawRepr leaves,
         OUTPUT(int*) binIdx, std::atomic<int>* maxBin) {
 
         if (qIdx >= qSize) return;
 
         const vec3f& pt = qPts[qIdx];
-        if (!boundary.include(pt)) return;
 
         // do sprouting
         int L = 0, R = 0;
@@ -94,6 +93,60 @@ namespace pmkd {
                 break;
             }
             bin = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : bin;
+        }
+    }
+
+    void UpdateKernel::findLeafBin(int qIdx, int qSize, const vec3f* qPts, int totalLeafSize,
+        const NodeMgrDevice nodeMgr, OUTPUT(int*) binIdx) {
+        if (qIdx >= qSize) return;
+        const vec3f& pt = qPts[qIdx];
+
+        // do sprouting
+        int iBatch = 0, localLeafIdx = 0;
+        int mainTreeLeafSize = nodeMgr.sizesAcc[0];
+        int L = 0, R = 0;
+        bool onRight;
+        int interiorIdx = 0;
+
+
+        int globalLeafIdx = 0;
+        while (globalLeafIdx < totalLeafSize) {
+            transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
+
+            const auto& leaves = nodeMgr.leavesBatch[iBatch];
+            const auto& interiors = nodeMgr.interiorsBatch[iBatch];
+
+            int rBound = iBatch == 0 ? mainTreeLeafSize : leaves.treeLocalRangeR[localLeafIdx];
+
+            while (localLeafIdx < rBound) {
+                int oldLocalLeafIdx = localLeafIdx;
+
+                L = leaves.segOffset[localLeafIdx];
+                R = localLeafIdx == rBound - 1 ? L : leaves.segOffset[localLeafIdx + 1];
+                onRight = false;
+                for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
+                    int splitDim = interiors.splitDim[interiorIdx];
+                    mfloat splitVal = interiors.splitVal[interiorIdx];
+                    onRight = pt[splitDim] >= splitVal;
+                    if (onRight) {
+                        // goto right child
+                        localLeafIdx = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : localLeafIdx;
+                        break;
+                    }
+                }
+                if (!onRight) {
+                    uint32_t globalSubstitute = leaves.replacedBy[localLeafIdx];
+                    if (globalSubstitute == 0) { // this leaf is valid (i.e. not replaced)
+                        binIdx[qIdx] = globalLeafIdx;
+                        return;
+                    }
+                    // leaf is replaced
+                    globalLeafIdx = globalSubstitute;
+                    break;
+                }
+                ++localLeafIdx;
+                globalLeafIdx += localLeafIdx - oldLocalLeafIdx;
+            }
         }
     }
 }

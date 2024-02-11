@@ -4,7 +4,8 @@ using namespace pmkd;
 
 int main(int argc, char* argv[]) {
     int N = argc > 1 ? std::stoi(argv[1]) : 1e7;
-    std::string filename = argc > 2 ? std::string(argv[2]) : "tree.txt";
+    std::string str = argc > 2 ? std::string(argv[2]) : "";
+    bool bPrint = str == "-p";
 
     auto pts = genPts(N, false, false);
     PMKDTree tree;
@@ -14,7 +15,7 @@ int main(int argc, char* argv[]) {
 
 
     auto findBin = [&](auto&& ptsAdd, int version) {
-        tree.findBin_Experiment(ptsAdd, version);
+        tree.findBin_Experiment(ptsAdd, version, bPrint);
         };
     // v1
     //auto ptsAdd = genPts(N / 10, true, false, tree.getGlobalBoundary());

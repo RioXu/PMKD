@@ -11,7 +11,7 @@ namespace pmkd {
 
 	struct PMKD_Config {
 		AABB globalBoundary;
-		bool optimize = false;
+		bool optimize = true;
 		uint32_t rebuildOnlyThreshold = 1e5;
 		float expandFactor = 1.5f;
 	};
@@ -19,20 +19,24 @@ namespace pmkd {
 	struct PMKD_PrintInfo;
 
 	class PMKDTree {
+#ifdef M_DEBUG
+	public:
+#else
 	private:
-		vector<vec3f> pts;
+#endif
 		AABB sceneBoundary;
 		AABB globalBoundary;
 
-		Leaves leaves;
-		Interiors interiors;
-		size_t ptNum;
+		std::unique_ptr<NodeMgr> nodeMgr;
 
 		class BufferPool;
 
 		std::unique_ptr<BufferPool> bufferPool;
 
 		PMKD_Config config;
+
+		// status
+		bool isStatic;
 	public:
 		PMKDTree();
 
@@ -48,24 +52,19 @@ namespace pmkd {
 
 		AABB getGlobalBoundary() const { return globalBoundary; }
 
-		size_t primSize() const { return ptNum; }
+		size_t primSize() const { return nodeMgr->numLeaves(); }
 
-		size_t primCapacity() const { return pts.capacity(); }
+		std::vector<vec3f> getStoredPoints() const;
 
 		QueryResponses query(const vector<Query>& queries) const;
 
 		RangeQueryResponses query(const vector<RangeQuery>& queries) const;
 
-		void findBin_Experiment(const vector<vec3f>& pts, int version);
+		void findBin_Experiment(const vector<vec3f>& pts, int version, bool print = false);
 
 		void insert(const vector<vec3f>& ptsAdd);
 
-		template<typename Range>
-		void firstInsert(Range&& range) {
-			ptNum += range.size();
-			this->pts = range;
-			buildStatic();
-		}
+		void firstInsert(const vector<vec3f>& ptsAdd);
 
 		void remove(const vector<vec3f>& ptsRemove);
 
@@ -75,11 +74,13 @@ namespace pmkd {
 	private:
 		void init();
 
-		void buildStatic();
+		void buildStatic(const vector<vec3f>& pts);
 
 		void buildIncrement(const vector<vec3f>& ptsAdd);
 
-		void expandStorage(size_t newCapacity);
+		PMKD_PrintInfo printStatic(bool verbose) const;
+
+		PMKD_PrintInfo printDynamic(bool verbose) const;
 	};
 
 	// BufferPool
@@ -125,7 +126,7 @@ namespace pmkd {
 
 			if (buffer.empty()) return;
 			auto& dq = getDeque<T>();
-			dq.push_back(buffer);
+			dq.push_back(std::move(buffer));
 		}
 	};
 

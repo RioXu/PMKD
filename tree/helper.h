@@ -6,6 +6,11 @@
 namespace pmkd {
     void compare_vectors(const float* vec1, const float* vec2, int* result);
 
+    template<typename T>
+    inline decltype(auto) fromConstPtr(const T* ptr) {
+        return const_cast<T*>(ptr);
+    }
+
     // merge addIdx and leafIdx into oPrimIdx
     // merge leafIdx and binIdx into oBinIdx
     template <typename R, typename BinaryOp>

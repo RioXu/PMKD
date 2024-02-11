@@ -2,18 +2,26 @@
 
 using namespace pmkd;
 
-int main() {
-    const size_t N = 30;
-    auto pts = genPts(N, false, true);
+int main(int argc, char* argv[]) {
+    int N = argc > 1 ? std::stoi(argv[1]) : 400;
+    auto pts = genPts(N, false, false);
+
     PMKDTree* tree = nullptr;
     auto init = [&]() {
         if (tree) delete tree;
         tree = new PMKDTree();
         tree->firstInsert(pts);
-    };
+        };
     mTimer("PMKD构造用时", init);
-    printPMKDInfo(*tree);
-    fmt::print("\n");
+    auto ptsAdd1 = genPts(N / 5, false, false, tree->getGlobalBoundary());
+    auto ptsAdd2 = genPts(N / 5, false, false, tree->getGlobalBoundary());
+
+    tree->insert(ptsAdd1);
+    tree->insert(ptsAdd2);
+
+    //printPMKD_Plain(*tree);
+    //printPMKDInfo(*tree);
+    //fmt::print("\n");
 
     std::ofstream file("correctness.txt");
     if (!file.is_open()) {
@@ -22,11 +30,18 @@ int main() {
     }
     // 点查询
     fmt::print("Point Search:\n");
+
+    vector<vec3f> ptQueries;
+    ptQueries.append(pts.begin() + pts.size() / 2, pts.end());
+    ptQueries.append(ptsAdd1.begin() + ptsAdd1.size() / 2, ptsAdd1.end());
+    ptQueries.append(ptsAdd2.begin() + ptsAdd2.size() / 2, ptsAdd2.end());
+
     int nErr = 0;
-    auto ptResp = tree->query(pts);
+    auto ptResp = tree->query(ptQueries);
     for (size_t i = 0; i < ptResp.size(); ++i) {
         if (!ptResp.exist[i]) {
-            loge("({:.3f}, {:.3f}, {:.3f}) not found", pts[i].x, pts[i].y, pts[i].z);
+            size_t j = ptResp.queryIdx[i];
+            loge("({:.3f}, {:.3f}, {:.3f}) not found", ptQueries[j].x, ptQueries[j].y, ptQueries[j].z);
             ++nErr;
         }
     }
@@ -36,31 +51,39 @@ int main() {
     // 范围查询
     fmt::print("Range Search:\n");
     fmt::print("Generate Ranges:\n");
-    auto rangeQueries = genRanges(N, false, true);
+    auto rangeQueries = genRanges(tree->primSize() / 3, false, false);
     nErr = 0;
     auto rangeResps = tree->query(rangeQueries);
-    auto rangeResps_Brutal = rangeQuery_Brutal(rangeQueries, pts);
+    // get all inserted points
+    vector<vec3f> allPts;
+    allPts.append(pts.begin(), pts.end());
+    allPts.append(ptsAdd1.begin(), ptsAdd1.end());
+    allPts.append(ptsAdd2.begin(), ptsAdd2.end());
+    //fmt::print("allPts:\n{}\n", allPts);
+
+    auto rangeResps_Brutal = rangeQuery_Brutal(rangeQueries, allPts);
     for (size_t i = 0; i < rangeResps.size(); ++i) {
+        size_t j = rangeResps.queryIdx[i];
         auto rangeResp = rangeResps.at(i);
-        auto rangeResp_Brutal = rangeResps_Brutal.at(i);
+        auto rangeResp_Brutal = rangeResps_Brutal.at(j);
 
         bool eq = isContentEqual(rangeResp, rangeResp_Brutal);
         if (!eq) {
             ++nErr;
-            loge("Range {} is incorrect", rangeQueries[i].toString());
+            loge("Range {} is incorrect", rangeQueries[j].toString());
         }
         // log to file
         if (!eq) fmt::print(file, "Incorrect ");
-        fmt::print(file, "Range {}:\n", rangeQueries[i].toString());
+        fmt::print(file, "Range {}:\n", rangeQueries[j].toString());
         fmt::print(file, "tree: ");
-        for (size_t j = 0; j < *(rangeResp.size); ++j) {
+        for (size_t k = 0; k < *(rangeResp.size); ++k) {
             fmt::print(file, "({:.3f}, {:.3f}, {:.3f}) ",
-                rangeResp.pts[j].x, rangeResp.pts[j].y, rangeResp.pts[j].z);
+                rangeResp.pts[k].x, rangeResp.pts[k].y, rangeResp.pts[k].z);
         }
         fmt::print(file, "\nbrutal: ");
-        for (size_t j = 0; j < *(rangeResp_Brutal.size); ++j) {
+        for (size_t k = 0; k < *(rangeResp_Brutal.size); ++k) {
             fmt::print(file, "({:.3f}, {:.3f}, {:.3f}) ",
-                rangeResp_Brutal.pts[j].x, rangeResp_Brutal.pts[j].y, rangeResp_Brutal.pts[j].z);
+                rangeResp_Brutal.pts[k].x, rangeResp_Brutal.pts[k].y, rangeResp_Brutal.pts[k].z);
         }
         fmt::print(file, "\n\n");
         // end log

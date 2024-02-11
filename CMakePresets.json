@@ -63,6 +63,9 @@
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "installDir": "${sourceDir}/out/install/${presetName}",
+            "environment": {
+                "CXX_FLAGS_PRESET": " -march=native -pipe"
+            },
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
@@ -85,8 +88,12 @@
                 "value": "x64",
                 "strategy": "external"
             },
+            "environment": {
+                "ASAN_OPTIONS": "halt_on_error=0"
+            },
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_CXX_FLAGS": "$env{CXX_FLAGS_PRESET} -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer -O0 -g2"
             }
         },
         {
@@ -94,7 +101,8 @@
             "displayName": "Linux Release",
             "inherits": "linux-debug",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_CXX_FLAGS": "$env{CXX_FLAGS_PRESET}"
             }
         }
     ]
