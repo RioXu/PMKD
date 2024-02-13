@@ -39,7 +39,7 @@ namespace pmkd {
 		vector<MortonType> morton;
 		// for dynamic tree
 		vector<int> treeLocalRangeR;  // exclusive, i.e. [L, R)
-		vector<int> replacedBy;
+		vector<int> replacedBy; // 0: not replaced, -1: removed, positive: replaced
 		vector<int> derivedFrom;
 
 		Leaves() = default;
@@ -112,6 +112,9 @@ namespace pmkd {
 		vector<mfloat> splitVal;
 		vector<int> parentSplitDim;
 		vector<mfloat> parentSplitVal;
+		// for dynamic tree
+		vector<uint8_t> metric;   // highest bit for remove / not removed, since metric itself has 5~6 bits
+		vector<int> mapidx;   // original index to optimized layout index
 
 		Interiors() = default;
 		Interiors(Interiors&&) = default;
@@ -234,10 +237,13 @@ namespace pmkd {
 		}
 
 		const Leaves& getLeaves(size_t batchIdx) const { return leavesBatch[batchIdx]; }
+		Leaves& getLeaves(size_t batchIdx) { return leavesBatch[batchIdx]; }
 
 		const Interiors& getInteriors(size_t batchIdx) const { return interiorsBatch[batchIdx]; }
+		Interiors& getInteriors(size_t batchIdx) { return interiorsBatch[batchIdx]; }
 
 		const vector<vec3f>& getPtsBatch(size_t batchIdx) const { return ptsBatch[batchIdx]; }
+		vector<vec3f>& getPtsBatch(size_t batchIdx) { return ptsBatch[batchIdx]; }
 
 		vector<vec3f> flattenPoints() const;
 
@@ -265,7 +271,7 @@ namespace pmkd {
 	};
 
 	struct BuildAid {
-		int* __restrict_arr metrics;
+		uint8_t* __restrict_arr metrics;
 		AtomicCount* visitCount;
 		int* __restrict_arr leftLeafCount;
 		int* __restrict_arr segLen;

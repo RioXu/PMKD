@@ -26,11 +26,11 @@ namespace pmkd {
 	//}
 
 	void BuildKernel::calcBuildMetrics(int idx, int interiorSize, const AABB& gBoundary, INPUT(MortonType*) morton,
-		OUTPUT(int*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
+		OUTPUT(uint8_t*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
 		if (idx >= interiorSize) return;
 
 		// reflects the highest differing bit between the keys covered by interior node idx
-		int metric = MortonType::calcMetric(morton[idx], morton[idx + 1]);
+		uint8_t metric = MortonType::calcMetric(morton[idx], morton[idx + 1]);
 		metrics[idx] = metric;
 		MortonType::calcSplit(metric, morton[idx + 1], gBoundary.ptMin, gBoundary.ptMax,
 			splitDim + idx, splitVal + idx);

@@ -58,11 +58,11 @@ namespace pmkd {
 				leftShift3f_32b(uz);
 		}
 
-		static inline int calcMetric (const Morton<32>& mc1, const Morton<32>& mc2) {
+		static inline uint8_t calcMetric(const Morton<32>& mc1, const Morton<32>& mc2) {
 			return 32 - clz32(mc1.code ^ mc2.code);
 		}
 
-		static inline void calcSplit(int metric, Morton<32> rm, const vec3f& ptMin, const vec3f& ptMax,
+		static inline void calcSplit(uint8_t metric, Morton<32> rm, const vec3f& ptMin, const vec3f& ptMax,
 			int* splitDim, mfloat* splitVal) {
 
 			metric = 32 - metric;
@@ -79,7 +79,7 @@ namespace pmkd {
 			*splitVal = val;
 		}
 
-		static inline void calcSplit(int metric, const vec3f& pt, int* splitDim, mfloat* splitVal) {
+		static inline void calcSplit(uint8_t metric, const vec3f& pt, int* splitDim, mfloat* splitVal) {
 			int dim = (32 - metric) % 3;
 			*splitDim = dim;
 			*splitVal = pt[dim];
@@ -119,11 +119,11 @@ namespace pmkd {
 				leftShift3f_64b(uz);
 		}
 
-		static inline int calcMetric(const Morton<64>& mc1, const Morton<64>& mc2) {
+		static inline uint8_t calcMetric(const Morton<64>& mc1, const Morton<64>& mc2) {
 			return 64 - clz64(mc1.code ^ mc2.code);
 		}
 
-		static inline void calcSplit(int metric, Morton<64> rm, const vec3f& ptMin, const vec3f& ptMax,
+		static inline void calcSplit(uint8_t metric, Morton<64> rm, const vec3f& ptMin, const vec3f& ptMax,
 			int* splitDim, mfloat* splitVal) {
 
 			metric = 64 - metric - 1;
@@ -140,7 +140,7 @@ namespace pmkd {
 			*splitVal = val;
 		}
 
-		static inline void calcSplit(int metric, const vec3f& pt, int* splitDim, mfloat* splitVal) {
+		static inline void calcSplit(uint8_t metric, const vec3f& pt, int* splitDim, mfloat* splitVal) {
 			int dim = (64 - metric) % 3;
 			*splitDim = dim;
 			*splitVal = pt[dim];

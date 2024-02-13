@@ -25,7 +25,7 @@ namespace pmkd {
 		//static void reorderLeaves(int idx, int size, LeavesRawRepr&& leaves, LeavesRawRepr&& leaves_sorted, int* mapidx);
 
 		static void calcBuildMetrics(int idx, int interiorSize, const AABB& gBoundary, INPUT(MortonType*) morton,
-			OUTPUT(int*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
+			OUTPUT(uint8_t*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
 
 		static void buildInteriors(int idx, int leafSize, const LeavesRawRepr leaves,
 			InteriorsRawRepr interiors, BuildAid aid);
@@ -51,7 +51,7 @@ namespace pmkd {
 	struct DynamicBuildKernel {
 		static void calcBuildMetrics(int idx, int interiorRealSize, const AABB& gBoundary,
 			INPUT(MortonType*) morton, INPUT(int*) interiorToLeafIdx,
-			OUTPUT(int*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
+			OUTPUT(uint8_t*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
 
 		static void buildInteriors(int idx, int batchLeafSize, INPUT(int*) localRangeL, const LeavesRawRepr leaves,
 			InteriorsRawRepr interiors, BuildAid aid);
@@ -101,6 +101,9 @@ namespace pmkd {
 
 		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int totalLeafSize,
 			const NodeMgrDevice nodeMgr, OUTPUT(int*) binIdx);
+
+		static void removePoints(int rIdx, int rSize, const vec3f* rPts, const NodeMgrDevice nodeMgr, int totalLeafSize,
+			const AABB& boundary);
 	};
 
 	struct VerifyKernel {

@@ -3,13 +3,13 @@
 namespace pmkd {
     void DynamicBuildKernel::calcBuildMetrics(int idx, int interiorRealSize, const AABB& gBoundary,
         INPUT(MortonType*) morton, INPUT(int*) interiorToLeafIdx,
-        OUTPUT(int*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
+        OUTPUT(uint8_t*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
         
         if (idx >= interiorRealSize) return;
         int leafIdx = interiorToLeafIdx[idx];
 
         // reflects the highest differing bit between the keys covered by interior node idx
-        int metric = MortonType::calcMetric(morton[leafIdx], morton[leafIdx + 1]);
+        uint8_t metric = MortonType::calcMetric(morton[leafIdx], morton[leafIdx + 1]);
         metrics[leafIdx] = metric;
         MortonType::calcSplit(metric, morton[leafIdx + 1], gBoundary.ptMin, gBoundary.ptMax,
             splitDim + leafIdx, splitVal + leafIdx);

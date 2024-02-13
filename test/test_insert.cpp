@@ -25,8 +25,10 @@ int main(int argc, char* argv[]) {
     std::vector scales{ 1e4,1e5,1e6,3e6,1e7 };
 
     AABB bound(-30, -30, -30, 30, 30, 30);
-    
-    PMKDTree* tree = new PMKDTree();
+    PMKD_Config config;
+    config.globalBoundary = bound;
+
+    PMKDTree* tree = new PMKDTree(config);
     auto staticBuild = [](PMKDTree* tree, auto&& pts) {
         tree->firstInsert(pts);
     };
@@ -43,6 +45,13 @@ int main(int argc, char* argv[]) {
         }
     };
 
+    auto incrementalBuild_v2 = [](PMKDTree* tree, auto&& ptsBatches) {
+        tree->firstInsert(ptsBatches[0]);
+        for (int i = 1; i < ptsBatches.size(); i++) {
+            tree->insert_v2(ptsBatches[i]);
+        }
+    };
+
     for (const auto& scale : scales) {
         auto pts = genPts(scale, true, false, bound);
         auto ptsAdd = genPts(scale * addFactor, true, false, bound);
@@ -53,6 +62,8 @@ int main(int argc, char* argv[]) {
         tree->destroy();
         mTimer("分批构造用时", incrementalBuild, tree, ptsBatches);
         mTimer("插入用时", addFunc, tree, ptsAdd);
+        tree->destroy();
+        mTimer("分批v2构造用时", incrementalBuild_v2, tree, ptsBatches);
         tree->destroy();
     }
 

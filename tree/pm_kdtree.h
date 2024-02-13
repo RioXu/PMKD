@@ -64,6 +64,8 @@ namespace pmkd {
 
 		void insert(const vector<vec3f>& ptsAdd);
 
+		void insert_v2(const vector<vec3f>& ptsAdd);
+
 		void firstInsert(const vector<vec3f>& ptsAdd);
 
 		void remove(const vector<vec3f>& ptsRemove);
@@ -78,6 +80,8 @@ namespace pmkd {
 
 		void buildIncrement(const vector<vec3f>& ptsAdd);
 
+		void buildIncrement_v2(const vector<vec3f>& ptsAdd);
+
 		PMKD_PrintInfo printStatic(bool verbose) const;
 
 		PMKD_PrintInfo printDynamic(bool verbose) const;
@@ -86,6 +90,7 @@ namespace pmkd {
 	// BufferPool
 	class PMKDTree::BufferPool {
 	private:
+		std::deque<vector<uint8_t>> byteBuffers;
 		std::deque<vector<int>> intBuffers;
 		std::deque<vector<mfloat>> floatBuffers;
 		std::deque<vector<vec3f>> vec3fBuffers;
@@ -93,6 +98,9 @@ namespace pmkd {
 
 		template<typename T>
 		std::deque<vector<T>>& getDeque();
+
+		template<>
+		std::deque<vector<uint8_t>>& getDeque<uint8_t>() {return byteBuffers; }
 
 		template<>
 		std::deque<vector<int>>& getDeque<int>() { return intBuffers; }
