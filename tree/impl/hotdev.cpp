@@ -38,17 +38,24 @@ namespace pmkd {
         const vec3f* targetPts = nullptr;
         if (version == 1) targetPts = ptsAdd.data();
         else if (version == 2 || version == 3 || version == 4) {
-            mTimer("分配primIdx", [&] {primIdx = parlay::tabulate(sizeInc, [](int i) {return i;});});
+            mTimer("分配primIdx", [&] {
+                primIdx.resize(sizeInc);
+                parlay::parallel_for(0, sizeInc, [&](size_t i) {primIdx[i] = i;});
+            });
             mTimer("排序primIdx", [&] {
                 //note: there are multiple sorting algorithms to choose from
                 parlay::integer_sort_inplace(
                     primIdx,
                     [&](const auto& idx) {return morton[idx].code;});
                 });
-            mTimer("排序ptsAdd", [&] {ptsSorted = parlay::tabulate(sizeInc, [&](int i) {return ptsAdd[primIdx[i]];});});
+            mTimer("排序ptsAdd", [&] {
+                ptsSorted.resize(sizeInc);
+                parlay::parallel_for(0, sizeInc, [&](size_t i) {ptsSorted[i] = ptsAdd[primIdx[i]];});
+            });
             if (version == 2 || version == 4) {
                 mTimer("排序Morton", [&] {
-                    mortonSorted = parlay::tabulate(sizeInc, [&](int i) {return morton[primIdx[i]];});
+                    mortonSorted.resize(sizeInc);
+                    parlay::parallel_for(0, sizeInc, [&](size_t i) {mortonSorted[i] = morton[primIdx[i]];});
                 });
             }
 
@@ -102,7 +109,7 @@ namespace pmkd {
             };
 
             vector<int> binCount;
-            vector<int> leafIdx;
+            parlay::sequence<int> leafIdx;
 
 
             mTimer("统计leafIdx", [&] {
@@ -134,7 +141,7 @@ namespace pmkd {
             });
        
             auto tempIdx = parlay::tabulate(combinedPrimIdx.size(), [&](int i) {return i;});
-            vector<int> finalBinIdx;
+            parlay::sequence<int> finalBinIdx;
             mTimer("根据合并binIdx排序", [&] {
                 parlay::stable_integer_sort_inplace(
                     tempIdx,

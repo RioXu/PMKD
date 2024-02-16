@@ -42,7 +42,7 @@ namespace pmkd {
 		if (idx >= leafSize) return;
 
 		int parent;
-		if (idx == 0 || (idx < leafSize - 1 && aid.metrics[idx - 1] > aid.metrics[idx])) {
+		if (idx == 0 || (idx < leafSize - 1 && interiors.metrics[idx - 1] > interiors.metrics[idx])) {
 			// is left child of Interior idx
 			parent = idx;
 			//leaves.parentSplitDim[idx] = interiors.splitDim[parent];
@@ -76,7 +76,7 @@ namespace pmkd {
 				break;
 			}
 
-			if (left == 0 || (right < leafSize - 1 && aid.metrics[left - 1] > aid.metrics[right])) {
+			if (left == 0 || (right < leafSize - 1 && interiors.metrics[left - 1] > interiors.metrics[right])) {
 				// is left child of Interior right
 				parent = right;
 				//interiors.parent[current] = parent;
@@ -101,14 +101,14 @@ namespace pmkd {
 	}
 
 	// optimized version of buildInteriors by removing branches
-	void BuildKernel::buildInteriors_opt(int idx, int leafSize, const LeavesRawRepr leaves,
+	void BuildKernel::buildInteriors_opt(int idx, int leafSize, const LeavesRawRepr leaves, INPUT(int*) metrics,
 		OUTPUT(int*) range[2], OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal,
 		OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal,
 		BuildAid aid) {
 		
 		if (idx >= leafSize) return;
 
-		int criteria = idx != 0 && (idx == leafSize - 1 || aid.metrics[idx - 1] <= aid.metrics[idx]); // 1 if is right child
+		int criteria = idx != 0 && (idx == leafSize - 1 || metrics[idx - 1] <= metrics[idx]); // 1 if is right child
 		int parent = idx - criteria;
 		//leaves.parentSplitDim[idx] = interiors.splitDim[parent];
 		//leaves.parentSplitVal[idx] = interiors.splitVal[parent];
@@ -135,7 +135,7 @@ namespace pmkd {
 				parentSplitDim[current] = -1;
 				break;
 			}
-			criteria = left != 0 && (right == leafSize - 1 || aid.metrics[left - 1] <= aid.metrics[right]); // 1 if is right child
+			criteria = left != 0 && (right == leafSize - 1 || metrics[left - 1] <= metrics[right]); // 1 if is right child
 			parent = LR[1 - criteria] - criteria;
 			range[criteria][parent] = LR[criteria];
 			if (!criteria) {
@@ -159,11 +159,11 @@ namespace pmkd {
 	}
 
 	// in place
-	void BuildKernel::reorderInteriors_step1(int idx, int interiorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+	void BuildKernel::reorderInteriors_step1(int idx, int interiorSize, const InteriorsRawRepr interiors,
 		OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
 
 		if (idx >= interiorSize) return;
-		int mapped_idx = mapidx[idx];
+		int mapped_idx = interiors.mapidx[idx];
 
 		rangeL[mapped_idx] = interiors.rangeL[idx];
 		rangeR[mapped_idx] = interiors.rangeR[idx];
@@ -172,11 +172,11 @@ namespace pmkd {
 		splitVal[mapped_idx] = interiors.splitVal[idx];
 	}
 
-	void BuildKernel::reorderInteriors_step2(int idx, int interiorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+	void BuildKernel::reorderInteriors_step2(int idx, int interiorSize, const InteriorsRawRepr interiors,
 		OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal) {
 
 		if (idx >= interiorSize) return;
-		int mapped_idx = mapidx[idx];
+		int mapped_idx = interiors.mapidx[idx];
 
 		parentSplitDim[mapped_idx] = interiors.parentSplitDim[idx];
 		parentSplitVal[mapped_idx] = interiors.parentSplitVal[idx];

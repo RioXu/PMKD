@@ -29,10 +29,10 @@
 
 using namespace pmkd;
 
-parlay::sequence<vec3f> genPts(size_t n, bool random = true, bool printInfo = true, AABB bound = AABB()) {
+vector<vec3f> genPts(size_t n, bool random = true, bool printInfo = true, AABB bound = AABB()) {
     static unsigned deterministic_seed = 0;
 
-    parlay::sequence<vec3f> points;
+    vector<vec3f> points;
     points.reserve(n);
 
     unsigned seed = random ? std::chrono::system_clock::now().time_since_epoch().count() : deterministic_seed++;
@@ -65,7 +65,7 @@ parlay::sequence<vec3f> genPts(size_t n, bool random = true, bool printInfo = tr
     return points;
 }
 
-parlay::sequence<vec3f> sortPts(const parlay::sequence<vec3f>& pts, AABB bound = AABB()) {
+vector<vec3f> sortPts(const vector<vec3f>& pts, AABB bound = AABB()) {
     size_t size = pts.size();
     if (pts.empty()) return {};
     if (bound == AABB()) {
@@ -86,12 +86,14 @@ parlay::sequence<vec3f> sortPts(const parlay::sequence<vec3f>& pts, AABB bound =
         primIdx,
         [&](const auto& idx) {return morton[idx].code;});
 
-    auto ptsSorted = parlay::tabulate(size, [&](int i) {return pts[primIdx[i]];});
+    vector<vec3f> ptsSorted(size);
+    parlay::parallel_for(0, size, [&](size_t i) {ptsSorted[i] = pts[primIdx[i]];});
+
     return ptsSorted;
 }
 
-parlay::sequence<AABB> genRanges(size_t n, bool random = true, bool printInfo = true) {
-    parlay::sequence<AABB> ranges;
+vector<AABB> genRanges(size_t n, bool random = true, bool printInfo = true) {
+    vector<AABB> ranges;
     ranges.reserve(n);
 
     unsigned seed = random ? std::chrono::system_clock::now().time_since_epoch().count() : 1;
@@ -115,7 +117,7 @@ parlay::sequence<AABB> genRanges(size_t n, bool random = true, bool printInfo = 
 }
 
 RangeQueryResponses rangeQuery_Brutal(
-    const parlay::sequence<RangeQuery>& queries, const parlay::sequence<vec3f>& pts) {
+    const vector<RangeQuery>& queries, const vector<vec3f>& pts) {
     if (queries.empty()) return RangeQueryResponses(0);
 
     size_t nq = queries.size();

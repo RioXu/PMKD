@@ -13,18 +13,19 @@ namespace pmkd {
         metrics[leafIdx] = metric;
         MortonType::calcSplit(metric, morton[leafIdx + 1], gBoundary.ptMin, gBoundary.ptMax,
             splitDim + leafIdx, splitVal + leafIdx);
-        int flag=1;
     }
 
     void DynamicBuildKernel::buildInteriors(int idx, int batchLeafSize, INPUT(int*) localRangeL, const LeavesRawRepr leaves,
         InteriorsRawRepr interiors, BuildAid aid) {
 
         if (idx >= batchLeafSize) return;
+        int lBound = localRangeL[idx];
+        int rBound = leaves.treeLocalRangeR[idx];
 
         int parent;
-        bool isLeftMost = idx == localRangeL[idx];
-        bool isRightMost = idx == leaves.treeLocalRangeR[idx] - 1;
-        if (isLeftMost || (!isRightMost && aid.metrics[idx - 1] > aid.metrics[idx])) {
+        bool isLeftMost = idx == lBound;
+        bool isRightMost = idx == rBound - 1;
+        if (isLeftMost || (!isRightMost && interiors.metrics[idx - 1] > interiors.metrics[idx])) {
             // is left child of Interior idx
             parent = idx;
             interiors.rangeL[parent] = idx;
@@ -45,15 +46,15 @@ namespace pmkd {
             left = interiors.rangeL[current];
             right = interiors.rangeR[current];
 
-            isLeftMost = left == localRangeL[left];
-            isRightMost = right == leaves.treeLocalRangeR[right] - 1;
+            isLeftMost = left == lBound;
+            isRightMost = right == rBound - 1;
             if (isLeftMost && isRightMost) {
                 //root
                 interiors.parentSplitDim[current] = -1;
                 break;
             }
 
-            if (isLeftMost || (!isRightMost && aid.metrics[left - 1] > aid.metrics[right])) {
+            if (isLeftMost || (!isRightMost && interiors.metrics[left - 1] > interiors.metrics[right])) {
                 // is left child of Interior right
                 parent = right;
                 interiors.rangeL[parent] = left;
@@ -92,11 +93,11 @@ namespace pmkd {
         mapidx[j] = idx_new;
     }
 
-    void DynamicBuildKernel::reorderInteriors_step1(int idx, int batchInteriorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+    void DynamicBuildKernel::reorderInteriors_step1(int idx, int batchInteriorSize, const InteriorsRawRepr interiors,
         OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
 
         if (idx >= batchInteriorSize) return;
-        int mapped_idx = mapidx[idx];
+        int mapped_idx = interiors.mapidx[idx];
         if (mapped_idx == -1) return;
 
         rangeL[mapped_idx] = interiors.rangeL[idx];
@@ -106,13 +107,14 @@ namespace pmkd {
         splitVal[mapped_idx] = interiors.splitVal[idx];
     }
 
-    void DynamicBuildKernel::reorderInteriors_step2(int idx, int batchInteriorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+    void DynamicBuildKernel::reorderInteriors_step2(int idx, int batchInteriorSize, const InteriorsRawRepr interiors,
         OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal) {
 
         if (idx >= batchInteriorSize) return;
-        int mapped_idx = mapidx[idx];
+        int mapped_idx = interiors.mapidx[idx];
         if (mapped_idx == -1) return;
 
+        int t = interiors.parentSplitDim[idx];
         parentSplitDim[mapped_idx] = interiors.parentSplitDim[idx];
         parentSplitVal[mapped_idx] = interiors.parentSplitVal[idx];
     }

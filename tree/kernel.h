@@ -31,7 +31,7 @@ namespace pmkd {
 			InteriorsRawRepr interiors, BuildAid aid);
 
 		// optimized version of buildInteriors by removing branches
-		static void buildInteriors_opt(int idx, int leafSize, const LeavesRawRepr leaves,
+		static void buildInteriors_opt(int idx, int leafSize, const LeavesRawRepr leaves, INPUT(int*) metrics,
 			OUTPUT(int*) range[2], OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal,
 			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal,
 			BuildAid aid);
@@ -40,10 +40,10 @@ namespace pmkd {
 			INPUT(int*) segLen, INPUT(int*) leftLeafCount, OUTPUT(int*) mapidx);
 
 		// in place
-		static void reorderInteriors_step1(int idx, int interiorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+		static void reorderInteriors_step1(int idx, int interiorSize, const InteriorsRawRepr interiors,
 			OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
 
-		static void reorderInteriors_step2(int idx, int interiorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+		static void reorderInteriors_step2(int idx, int interiorSize, const InteriorsRawRepr interiors,
 			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
 	};
 
@@ -63,10 +63,10 @@ namespace pmkd {
 			const LeavesRawRepr leaves, const InteriorsRawRepr interiors,
 			INPUT(int*) segLen, INPUT(int*) leftLeafCount, OUTPUT(int*) mapidx);
 
-		static void reorderInteriors_step1(int idx, int batchInteriorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+		static void reorderInteriors_step1(int idx, int batchInteriorSize, const InteriorsRawRepr interiors,
 			OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
 
-		static void reorderInteriors_step2(int idx, int batchInteriorSize, const InteriorsRawRepr interiors, INPUT(int*) mapidx,
+		static void reorderInteriors_step2(int idx, int batchInteriorSize, const InteriorsRawRepr interiors,
 			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
 
 		static void setSubtreeRootParentSplit(int idx, int numSubTree,
@@ -77,13 +77,13 @@ namespace pmkd {
 
 	struct SearchKernel {
 		static void searchPoints(int qIdx, int qSize, const Query* qPts, const vec3f* pts, int leafSize,
-			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary, bool* exist);
+			const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary, uint8_t* exist);
 
 		static void searchPoints(int qIdx, int qSize, const Query* qPts, const NodeMgrDevice nodeMgr, int totalLeafSize,
-			const AABB& boundary, bool* exist);
+			const AABB& boundary, uint8_t* exist);
 
 		static void searchRanges(int qIdx, int qSize, const RangeQuery* qRanges, const vec3f* pts, int leafSize,
-			InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary,
+			const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
 			RangeQueryResponsesRawRepr resps);
 
 		static void searchRanges(int qIdx, int qSize, const RangeQuery* qRanges, const NodeMgrDevice nodeMgr, int totalLeafSize,
@@ -102,8 +102,15 @@ namespace pmkd {
 		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int totalLeafSize,
 			const NodeMgrDevice nodeMgr, OUTPUT(int*) binIdx);
 
-		static void removePoints(int rIdx, int rSize, const vec3f* rPts, const NodeMgrDevice nodeMgr, int totalLeafSize,
-			const AABB& boundary);
+		static void removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const vec3f* pts, int leafSize,
+			InteriorsRawRepr interiors, LeavesRawRepr leaves, OUTPUT(int*) binIdx);
+
+		static void removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const NodeMgrDevice nodeMgr, int totalLeafSize, OUTPUT(int*) binIdx);
+
+		static void removePoints_step2(int rIdx, int rSize, int leafSize, INPUT(int*) binIdx, const LeavesRawRepr leaves,
+			InteriorsRawRepr interiors);
+		
+		static void removePoints_step2(int rIdx, int rSize, int totalLeafSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr);
 	};
 
 	struct VerifyKernel {

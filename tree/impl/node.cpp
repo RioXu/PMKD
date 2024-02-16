@@ -37,7 +37,7 @@ namespace pmkd {
         for (const auto& batch : ptsBatch) {
             nodeMgrH.ptsBatch.push_back(batch);
         }
-        nodeMgrH.sizesAcc.append(sizesAcc);
+        nodeMgrH.sizesAcc.insert(nodeMgrH.sizesAcc.end(), sizesAcc.begin(), sizesAcc.end());
         return nodeMgrH;
     }
 
@@ -46,7 +46,7 @@ namespace pmkd {
         pts.reserve(numLeaves());
 
         for (const auto& batch : ptsBatch) {
-            pts.append(batch);
+            pts.insert(pts.end(), batch.begin(), batch.end());
         }
         return pts;
     }

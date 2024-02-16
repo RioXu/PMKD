@@ -121,10 +121,28 @@ namespace pmkd {
 		vector<T> acquire(size_t size) {
 			auto& dq = getDeque<T>();
 			if (dq.empty()) { return vector<T>(size); }
-			auto& buffer = dq.front();
+			//auto buffer = std::move(dq.front());
+			//auto& buffer = dq.front();
+			//auto buffer = dq.front();
+			vector<T> buffer(std::move(dq.front()));
+			//auto buffer(dq.front());
 			dq.pop_front();
 
-			buffer.resize(size);
+			if (buffer.size() != size)
+				buffer.resize(size);
+			return std::move(buffer);
+		}
+
+		template<typename T>
+		vector<T> acquire(size_t size, T val) {
+			auto& dq = getDeque<T>();
+			if (dq.empty()) { return vector<T>(size, val); }
+
+			vector<T> buffer(std::move(dq.front()));
+			dq.pop_front();
+
+			buffer.clear();
+			buffer.resize(size, val);
 			return std::move(buffer);
 		}
 

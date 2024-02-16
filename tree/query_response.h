@@ -7,15 +7,15 @@ namespace pmkd {
 	using Query = vec3f;
 	using RangeQuery = AABB;
 
-	const uint32_t DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE = 30;
+	const uint32_t DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE = 150;
 
 
 	struct QueryResponses {
 		vector<int> queryIdx;
-		vector<bool> exist;
+		vector<uint8_t> exist;
 
-		QueryResponses(size_t size):exist(size, false) {
-			queryIdx = parlay::to_sequence(parlay::iota<int>(size));
+		QueryResponses(size_t size):exist(size, 0), queryIdx(size) {
+			parlay::parallel_for(0, size, [&](size_t i) {queryIdx[i] = i;});
 		}
 
 		QueryResponses(const QueryResponses&) = delete;
@@ -60,9 +60,11 @@ namespace pmkd {
 
 		RangeQueryResponses(uint32_t num, uint32_t capacityPerResponse = DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE)
 			:numResponse(num), capPerResponse(capacityPerResponse),
-			buffer(num* capacityPerResponse), respSize(num, 0) {
-			
-			queryIdx = parlay::to_sequence(parlay::iota<int>(num));
+			buffer(num* capacityPerResponse), respSize(num, 0),
+			queryIdx(num)
+		{
+
+			parlay::parallel_for(0, num, [&](size_t i) {queryIdx[i] = i;});
 		}
 
 		RangeQueryResponses(const RangeQueryResponses&) = delete;
@@ -93,7 +95,8 @@ namespace pmkd {
 			buffer.clear();
 			buffer.resize(numResponse * capPerResponse);
 			respSize.resize(numResponse, 0);
-			queryIdx = parlay::to_sequence(parlay::iota<int>(num));
+			queryIdx.resize(numResponse);
+			parlay::parallel_for(0, numResponse, [&](size_t i) {queryIdx[i] = i;});
 		}
 
 		size_t size() const { return respSize.size(); }

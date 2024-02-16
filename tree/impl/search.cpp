@@ -2,8 +2,14 @@
 #include <common/util/atomic_ext.h>
 
 namespace pmkd {
+	inline bool isInteriorRemoved(const AtomicCount& alterState) {
+		int state = alterState.cnt.load(std::memory_order_relaxed);
+		return (state & 0b1100) == 0b1100;
+		//return (alterState.cnt.load(std::memory_order_relaxed) & 0b1100) == 0b1100;
+	}
+
 	void SearchKernel::searchPoints(int qIdx, int qSize, const Query* qPts, const vec3f* pts, int leafSize,
-		InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary, bool* exist) {
+		const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary, uint8_t* exist) {
 		if (qIdx >= qSize) return;
 		const vec3f& pt = qPts[qIdx];
 		if (!boundary.include(pt)) return;
@@ -17,6 +23,10 @@ namespace pmkd {
 			R = begin == leafSize - 1 ? L : leaves.segOffset[begin + 1];
 			onRight = false;
 			for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
+				if (isInteriorRemoved(interiors.alterState[interiorIdx])) {
+					return;
+				}
+
 				int splitDim = interiors.splitDim[interiorIdx];
 				mfloat splitVal = interiors.splitVal[interiorIdx];
 				onRight = pt[splitDim] >= splitVal;
@@ -32,14 +42,14 @@ namespace pmkd {
 			if (!onRight) {
 				// hit leaf with index <begin>
 				//resp[qIdx].exist = pts[leaves.primIdx[begin]] == pt;
-				exist[qIdx] = pts[begin] == pt;
+				exist[qIdx] = leaves.replacedBy[begin] == 0 && pts[begin] == pt;
 				break;
 			}
 		}
 	}
 
 	void SearchKernel::searchPoints(int qIdx, int qSize, const Query* qPts, const NodeMgrDevice nodeMgr, int totalLeafSize,
-		const AABB& boundary, bool* exist) {
+		const AABB& boundary, uint8_t* exist) {
 		if (qIdx >= qSize) return;
 		const vec3f& pt = qPts[qIdx];
 		if (!boundary.include(pt)) return;
@@ -62,13 +72,16 @@ namespace pmkd {
 
 			int rBound = iBatch == 0 ? mainTreeLeafSize : leaves.treeLocalRangeR[localLeafIdx];
 
-			while (localLeafIdx < rBound) {
+ 			while (localLeafIdx < rBound) {
 				int oldLocalLeafIdx = localLeafIdx;
 				
 				L = leaves.segOffset[localLeafIdx];
 				R = localLeafIdx == rBound - 1 ? L : leaves.segOffset[localLeafIdx + 1];
 				onRight = false;
 				for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
+					if (isInteriorRemoved(interiors.alterState[interiorIdx]))
+					 	return;
+					
 					int splitDim = interiors.splitDim[interiorIdx];
 					mfloat splitVal = interiors.splitVal[interiorIdx];
 					onRight = pt[splitDim] >= splitVal;
@@ -79,9 +92,9 @@ namespace pmkd {
 					}
 				}
 				if (!onRight) {
-					uint32_t globalSubstitute = leaves.replacedBy[localLeafIdx];
-					if (globalSubstitute == 0) { // this leaf is valid (i.e. not replaced)
-						exist[qIdx] = nodeMgr.ptsBatch[iBatch][localLeafIdx] == pt;
+					int globalSubstitute = leaves.replacedBy[localLeafIdx];
+					if (globalSubstitute <= 0) { // this leaf is valid or removed (i.e. not replaced)
+						exist[qIdx] = !(globalSubstitute < 0) && nodeMgr.ptsBatch[iBatch][localLeafIdx] == pt;
 						return;
 					}
 					// leaf is replaced
@@ -95,7 +108,7 @@ namespace pmkd {
 	}
 
 	void SearchKernel::searchRanges(int qIdx, int qSize, const RangeQuery* qRanges, const vec3f* pts, int leafSize,
-		InteriorsRawRepr interiors, LeavesRawRepr leaves, const AABB& boundary,
+		const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary,
 		RangeQueryResponsesRawRepr resps) {
 		
 		if (qIdx >= qSize) return;
@@ -114,17 +127,23 @@ namespace pmkd {
 			onRight = false;
 
 			// skip if box does not overlap the subtree rooted at L
-			splitDim = interiors.parentSplitDim[L];
-			if (L < R && splitDim >= 0) {
-				splitVal = interiors.parentSplitVal[L];
-				if (box.ptMax[splitDim] < splitVal) continue;
+			if (L < R) {
+				splitDim = interiors.parentSplitDim[L];
+				if (splitDim >= 0) {
+					splitVal = interiors.parentSplitVal[L];
+					if (box.ptMax[splitDim] < splitVal) continue;
+				}
 			}
 
 			for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
-				splitDim = interiors.splitDim[interiorIdx];
-				splitVal = interiors.splitVal[interiorIdx];
+				onRight = isInteriorRemoved(interiors.alterState[interiorIdx]); // removed
+				if (!onRight) {
+					splitDim = interiors.splitDim[interiorIdx];
+					splitVal = interiors.splitVal[interiorIdx];
 
-				onRight = box.ptMin[splitDim] >= splitVal;
+					onRight = box.ptMin[splitDim] >= splitVal;
+				}
+
 				if (onRight) {
 					// goto right child
 					//begin = interiorIdx < R - 1 ? 
@@ -137,7 +156,8 @@ namespace pmkd {
 			if (onRight) continue;
 
 			// hit leaf with index <begin>
-			//auto& target = pts[leaves.primIdx[begin]];
+			if (leaves.replacedBy[begin] < 0) continue;  // leaf is removed
+
 			auto& target = pts[begin];
 			if (box.include(target)) {
 				auto& respSize = *(resps.getSizePtr(qIdx));
@@ -189,16 +209,24 @@ namespace pmkd {
 				R = localLeafIdx == rBound - 1 ? L : leaves.segOffset[localLeafIdx + 1];
 				onRight = false;
 
-				splitDim = interiors.parentSplitDim[L];
-				if (L < R && splitDim >= 0) {
-					splitVal = interiors.parentSplitVal[L];
-					if (box.ptMax[splitDim] < splitVal) continue;
+				
+				if (L < R) {
+					splitDim = interiors.parentSplitDim[L];
+					if (splitDim >= 0) {
+						splitVal = interiors.parentSplitVal[L];
+						if (box.ptMax[splitDim] < splitVal)
+							continue;
+					}
 				}
 
 				for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
-					splitDim = interiors.splitDim[interiorIdx];
-					splitVal = interiors.splitVal[interiorIdx];
-					onRight = box.ptMin[splitDim] >= splitVal;
+					onRight = isInteriorRemoved(interiors.alterState[interiorIdx]);
+					if (!onRight) {
+						splitDim = interiors.splitDim[interiorIdx];
+						splitVal = interiors.splitVal[interiorIdx];
+						onRight = box.ptMin[splitDim] >= splitVal;
+					}
+
 					if (onRight) {
 						// goto right child
 						localLeafIdx = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : localLeafIdx;
@@ -206,8 +234,8 @@ namespace pmkd {
 					}
 				}
 				if (!onRight) {
-					uint32_t globalSubstitute = leaves.replacedBy[localLeafIdx];
-					if (globalSubstitute == 0) { // this leaf is valid (i.e. not replaced)
+					int globalSubstitute = leaves.replacedBy[localLeafIdx];
+					if (globalSubstitute == 0) { // this leaf is valid (i.e. not replaced or removed)
 						auto& target = nodeMgr.ptsBatch[iBatch][localLeafIdx];
 						if (box.include(target)) {
 							auto& respSize = *(resps.getSizePtr(qIdx));
@@ -215,7 +243,7 @@ namespace pmkd {
 							if (respSize >= resps.capPerResponse) return;
 						}
 					}
-					else {
+					else if (globalSubstitute > 0) {
 						// leaf is replaced
 						globalLeafIdx = globalSubstitute;
 						state = 1;

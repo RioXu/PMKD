@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <parlay/sequence.h>
+#include <vector>
 #include "morton.h"
 
 namespace pmkd {
@@ -9,7 +10,15 @@ namespace pmkd {
 	using TreeIdx = uint32_t;
 
 	template<typename T>
-	using vector = parlay::sequence<T>;
+	//using vector = parlay::sequence<T>;
+	using vector = std::vector<T>;
+
+	struct AtomicCount {
+		std::atomic<int> cnt;  // size is 4
+		//char pack[60];       // note: this optimization may not be necessary
+
+		AtomicCount() : cnt(0) {}
+	};
 
 	// using Structure of Arrays (SOA) pattern
 	struct LeavesRawRepr {
@@ -22,20 +31,21 @@ namespace pmkd {
 	};
 
 	struct InteriorsRawRepr {
-		//int* parent;
-		//TreeIdx* lc, * rc;
 		int* __restrict_arr rangeL;
 		int* __restrict_arr rangeR;
-		//TreeIdx* escape;
 		int* __restrict_arr splitDim;
 		mfloat* __restrict_arr splitVal;
 		int* __restrict_arr parentSplitDim;
 		mfloat* __restrict_arr parentSplitVal;
+		// for dynamic tree
+		uint8_t* __restrict_arr metrics;
+		int* __restrict_arr mapidx;
+		AtomicCount* __restrict_arr alterState;
 	};
 
 	struct Leaves {
 		//vector<int> primIdx;
-		vector<int> segOffset;
+		parlay::sequence<int> segOffset;
 		vector<MortonType> morton;
 		// for dynamic tree
 		vector<int> treeLocalRangeR;  // exclusive, i.e. [L, R)
@@ -69,13 +79,13 @@ namespace pmkd {
 			derivedFrom.resize(size);
 		}
 
-		void append(const Leaves& other) {
-            segOffset.append(other.segOffset);
-            morton.append(other.morton);
-            treeLocalRangeR.append(other.treeLocalRangeR);
-            replacedBy.append(other.replacedBy);
-            derivedFrom.append(other.derivedFrom);
-		}
+		// void append(const Leaves& other) {
+        //     segOffset.append(other.segOffset);
+        //     morton.append(other.morton);
+        //     treeLocalRangeR.append(other.treeLocalRangeR);
+        //     replacedBy.append(other.replacedBy);
+        //     derivedFrom.append(other.derivedFrom);
+		// }
 
 		Leaves copyToHost() const {
 			Leaves res;
@@ -113,8 +123,10 @@ namespace pmkd {
 		vector<int> parentSplitDim;
 		vector<mfloat> parentSplitVal;
 		// for dynamic tree
-		vector<uint8_t> metric;   // highest bit for remove / not removed, since metric itself has 5~6 bits
+		vector<uint8_t> metrics;
 		vector<int> mapidx;   // original index to optimized layout index
+		// 1b: lc visit, 10b: rc visit, 100b: lc removal, 1000b: rc removal
+		vector<AtomicCount> alterState;
 
 		Interiors() = default;
 		Interiors(Interiors&&) = default;
@@ -132,6 +144,10 @@ namespace pmkd {
 			splitVal.reserve(capacity);
 			parentSplitDim.reserve(capacity);
 			parentSplitVal.reserve(capacity);
+
+			metrics.reserve(capacity);
+			mapidx.reserve(capacity);
+			//alterState.reserve(capacity);
 		}
 
 		void resize(size_t size) {
@@ -141,16 +157,24 @@ namespace pmkd {
 			splitVal.resize(size);
 			parentSplitDim.resize(size);
 			parentSplitVal.resize(size);
+
+			metrics.resize(size);
+            mapidx.resize(size);
+            alterState = vector<AtomicCount>(size);
 		}
 
-		void append(const Interiors& other) {
-			rangeL.append(other.rangeL);
-            rangeR.append(other.rangeR);
-            splitDim.append(other.splitDim);
-            splitVal.append(other.splitVal);
-            parentSplitDim.append(other.parentSplitDim);
-            parentSplitVal.append(other.parentSplitVal);
-		}
+		// void append(const Interiors& other) {
+		// 	rangeL.append(other.rangeL);
+        //     rangeR.append(other.rangeR);
+        //     splitDim.append(other.splitDim);
+        //     splitVal.append(other.splitVal);
+        //     parentSplitDim.append(other.parentSplitDim);
+		// 	parentSplitVal.append(other.parentSplitVal);
+
+		// 	metrics.append(other.metrics);
+        //     mapidx.append(other.mapidx);
+        //     //alterState.append(other.alterState);
+		// }
 
 		Interiors copyToHost() const {
 			Interiors res;
@@ -159,15 +183,24 @@ namespace pmkd {
             res.splitDim = splitDim;
             res.splitVal = splitVal;
             res.parentSplitDim = parentSplitDim;
-            res.parentSplitVal = parentSplitVal;
-            return res;
+			res.parentSplitVal = parentSplitVal;
+
+			res.metrics = metrics;
+			res.mapidx = mapidx;
+			res.alterState = vector<AtomicCount>(alterState.size());
+			for (size_t i = 0; i < alterState.size(); ++i) {
+                res.alterState[i].cnt = alterState[i].cnt.load();
+            }
+			return res;
 		}
 
 		InteriorsRawRepr getRawRepr(size_t offset = 0u) {
 			return InteriorsRawRepr{
-				rangeL.data()+offset, rangeR.data()+offset,
-				splitDim.data()+offset,splitVal.data()+offset,
-				parentSplitDim.data()+offset,parentSplitVal.data()+offset
+				rangeL.data() + offset, rangeR.data() + offset,
+				splitDim.data() + offset,splitVal.data() + offset,
+				parentSplitDim.data() + offset,parentSplitVal.data() + offset,
+				metrics.data() + offset, mapidx.data() + offset,
+				alterState.data() + offset
 			};
 		}
 
@@ -175,7 +208,9 @@ namespace pmkd {
 			return InteriorsRawRepr{
 				const_cast<int*>(rangeL.data())+offset, const_cast<int*>(rangeR.data())+offset,
 				const_cast<int*>(splitDim.data())+offset,const_cast<mfloat*>(splitVal.data())+offset,
-				const_cast<int*>(parentSplitDim.data())+offset,const_cast<mfloat*>(parentSplitVal.data())+offset
+				const_cast<int*>(parentSplitDim.data()) + offset,const_cast<mfloat*>(parentSplitVal.data()) + offset,
+				const_cast<uint8_t*>(metrics.data())+offset, const_cast<int*>(mapidx.data())+offset,
+                const_cast<AtomicCount*>(alterState.data())+offset
 			};
 		}
 	};
@@ -263,15 +298,8 @@ namespace pmkd {
 		HostCopy copyToHost() const;
 	};
 
-	struct AtomicCount {
-		std::atomic<int> cnt;  // size is 4
-		//char pack[60];       // note: this optimization may not be necessary
-
-		AtomicCount() : cnt(0) {}
-	};
-
 	struct BuildAid {
-		uint8_t* __restrict_arr metrics;
+		//uint8_t* __restrict_arr metrics;
 		AtomicCount* visitCount;
 		int* __restrict_arr leftLeafCount;
 		int* __restrict_arr segLen;
