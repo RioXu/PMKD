@@ -3,7 +3,9 @@
 using namespace pmkd;
 
 int main(int argc, char* argv[]) {
-    int N = argc > 1 ? std::stoi(argv[1]) : 20;
+    int N = argc > 1 ? std::stoi(argv[1]) : 80;
+    bool verbose = argc > 2 ? std::string(argv[2]) == "-v" : false;
+    
     auto pts = genPts(N, false, false);
 
     fmt::print("插入测试-分批插入\n");
@@ -13,6 +15,10 @@ int main(int argc, char* argv[]) {
         tree = new PMKDTree();
         tree->firstInsert(pts);
     };
+    auto remove = [&](auto&& _ptsRemove) {
+        tree->remove(_ptsRemove);
+    };
+    
     init();
     auto ptsAdd1 = genPts(N / 5, false, false, tree->getGlobalBoundary());
     auto ptsAdd2 = genPts(N / 5, false, false, tree->getGlobalBoundary());
@@ -42,7 +48,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < ptResp.size(); ++i) {
         if (!ptResp.exist[i]) {
             size_t j = ptResp.queryIdx[i];
-            loge("({:.3f}, {:.3f}, {:.3f}) not found", ptQueries[j].x, ptQueries[j].y, ptQueries[j].z);
+            if (verbose) loge("({:.3f}, {:.3f}, {:.3f}) not found", ptQueries[j].x, ptQueries[j].y, ptQueries[j].z);
             ++nErr;
         }
     }
@@ -71,7 +77,7 @@ int main(int argc, char* argv[]) {
         bool eq = isContentEqual(rangeResp, rangeResp_Brutal);
         if (!eq) {
             ++nErr;
-            loge("Range {} is incorrect", rangeQueries[j].toString());
+            if (verbose) loge("Range {} is incorrect", rangeQueries[j].toString());
         }
         // log to file
         if (!eq) {
@@ -86,8 +92,8 @@ int main(int argc, char* argv[]) {
                 fmt::print(file, "({:.3f}, {:.3f}, {:.3f}) ",
                     rangeResp_Brutal.pts[k].x, rangeResp_Brutal.pts[k].y, rangeResp_Brutal.pts[k].z);
             }
+            fmt::print(file, "\n\n");
         }
-        fmt::print(file, "\n\n");
         // end log
     }
     fmtlog::poll();
@@ -108,7 +114,8 @@ int main(int argc, char* argv[]) {
     // static
     tree->destroy();
     tree->firstInsert(allPts);
-    tree->remove(ptRemove);
+    mTimer("删除用时", remove, ptRemove);
+    //tree->remove(ptRemove);
 
     // 点测试
     fmt::print("Point Search:\n");
@@ -117,7 +124,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < ptResp.size(); ++i) {
         if (ptResp.exist[i]) {
             size_t j = ptResp.queryIdx[i];
-            loge("({:.3f}, {:.3f}, {:.3f}) removed but found", ptRemove[j].x, ptRemove[j].y, ptRemove[j].z);
+            if (verbose) loge("({:.3f}, {:.3f}, {:.3f}) removed but found", ptRemove[j].x, ptRemove[j].y, ptRemove[j].z);
             ++nErr;
         }
     }
@@ -125,7 +132,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < ptResp.size(); ++i) {
         if (!ptResp.exist[i]) {
             size_t j = ptResp.queryIdx[i];
-            loge("({:.3f}, {:.3f}, {:.3f}) not found", ptRemain[j].x, ptRemain[j].y, ptRemain[j].z);
+            if (verbose) loge("({:.3f}, {:.3f}, {:.3f}) not found", ptRemain[j].x, ptRemain[j].y, ptRemain[j].z);
             ++nErr;
         }
     }
@@ -148,7 +155,7 @@ int main(int argc, char* argv[]) {
         bool eq = isContentEqual(rangeResp, rangeResp_Brutal);
         if (!eq) {
             ++nErr;
-            loge("Range {} is incorrect", rangeQueries[j].toString());
+            if (verbose) loge("Range {} is incorrect", rangeQueries[j].toString());
         }
         // log to file
         if (!eq) {
@@ -176,7 +183,8 @@ int main(int argc, char* argv[]) {
     tree->firstInsert(pts);
     tree->insert(ptsAdd1);
     tree->insert(ptsAdd2);
-    tree->remove(ptRemove);
+    mTimer("删除用时", remove, ptRemove);
+    //tree->remove(ptRemove);
 
     // 点测试
     fmt::print("Point Search:\n");
@@ -185,7 +193,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < ptResp.size(); ++i) {
         if (ptResp.exist[i]) {
             size_t j = ptResp.queryIdx[i];
-            loge("({:.3f}, {:.3f}, {:.3f}) removed but found", ptRemove[j].x, ptRemove[j].y, ptRemove[j].z);
+            if (verbose) loge("({:.3f}, {:.3f}, {:.3f}) removed but found", ptRemove[j].x, ptRemove[j].y, ptRemove[j].z);
             ++nErr;
         }
     }
@@ -193,7 +201,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < ptResp.size(); ++i) {
         if (!ptResp.exist[i]) {
             size_t j = ptResp.queryIdx[i];
-            loge("i: {}, ({:.3f}, {:.3f}, {:.3f}) not found", i, ptRemain[j].x, ptRemain[j].y, ptRemain[j].z);
+            if (verbose) loge("i: {}, ({:.3f}, {:.3f}, {:.3f}) not found", i, ptRemain[j].x, ptRemain[j].y, ptRemain[j].z);
             ++nErr;
         }
     }
@@ -216,7 +224,7 @@ int main(int argc, char* argv[]) {
         bool eq = isContentEqual(rangeResp, rangeResp_Brutal);
         if (!eq) {
             ++nErr;
-            loge("Range {} is incorrect", rangeQueries[j].toString());
+            if (verbose) loge("Range {} is incorrect", rangeQueries[j].toString());
         }
         // log to file
         if (!eq) {
@@ -236,6 +244,42 @@ int main(int argc, char* argv[]) {
     }
     fmtlog::poll();
     fmt::print("{}/{} Failures\n\n", nErr, rangeQueries.size());
+
+    fmt::print("删除测试-插入+删除+插入\n");
+    vector<vec3f> ptRemove2(pts.begin(), pts.begin() + pts.size() / 2);
+    vector<vec3f> ptRemain2(pts.begin() + pts.size() / 2, pts.end());
+    ptRemain2.insert(ptRemain2.end(), ptsAdd1.begin(), ptsAdd1.end());
+    ptRemain2.insert(ptRemain2.end(), ptsAdd2.begin(), ptsAdd2.end());
+
+    // dynamic
+    tree->destroy();
+
+    tree->firstInsert(pts);
+    mTimer("删除用时", remove, ptRemove2);
+    tree->insert(ptsAdd1);
+    tree->insert(ptsAdd2);
+
+    // 点测试
+    fmt::print("Point Search:\n");
+    nErr = 0;
+    ptResp = tree->query(ptRemove2);
+    for (size_t i = 0; i < ptResp.size(); ++i) {
+        if (ptResp.exist[i]) {
+            size_t j = ptResp.queryIdx[i];
+            if (verbose) loge("({:.3f}, {:.3f}, {:.3f}) removed but found", ptRemove2[j].x, ptRemove2[j].y, ptRemove2[j].z);
+            ++nErr;
+        }
+    }
+    ptResp = tree->query(ptRemain2);
+    for (size_t i = 0; i < ptResp.size(); ++i) {
+        if (!ptResp.exist[i]) {
+            size_t j = ptResp.queryIdx[i];
+            if (verbose) loge("i: {}, ({:.3f}, {:.3f}, {:.3f}) not found", i, ptRemain2[j].x, ptRemain2[j].y, ptRemain2[j].z);
+            ++nErr;
+        }
+    }
+    fmtlog::poll();
+    fmt::print("{}/{} Failures\n\n", nErr, ptRemove2.size() + ptRemain2.size());
 
     fmt::print("All done!\n");
 

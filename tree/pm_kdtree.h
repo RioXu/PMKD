@@ -82,6 +82,8 @@ namespace pmkd {
 
 		void buildIncrement_v2(const vector<vec3f>& ptsAdd);
 
+		void _query(const vector<RangeQuery>& queries, RangeQueryResponses& responses) const;
+
 		PMKD_PrintInfo printStatic(bool verbose) const;
 
 		PMKD_PrintInfo printDynamic(bool verbose) const;

@@ -1,12 +1,8 @@
+#include <tree/device_helper.h>
 #include <tree/kernel.h>
 #include <common/util/atomic_ext.h>
 
 namespace pmkd {
-	inline bool isInteriorRemoved(const AtomicCount& alterState) {
-		int state = alterState.cnt.load(std::memory_order_relaxed);
-		return (state & 0b1100) == 0b1100;
-		//return (alterState.cnt.load(std::memory_order_relaxed) & 0b1100) == 0b1100;
-	}
 
 	void SearchKernel::searchPoints(int qIdx, int qSize, const Query* qPts, const vec3f* pts, int leafSize,
 		const InteriorsRawRepr interiors, const LeavesRawRepr leaves, const AABB& boundary, uint8_t* exist) {
@@ -23,7 +19,7 @@ namespace pmkd {
 			R = begin == leafSize - 1 ? L : leaves.segOffset[begin + 1];
 			onRight = false;
 			for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
-				if (isInteriorRemoved(interiors.alterState[interiorIdx])) {
+				if (isInteriorRemoved(interiors.removeState[interiorIdx])) {
 					return;
 				}
 
@@ -79,7 +75,7 @@ namespace pmkd {
 				R = localLeafIdx == rBound - 1 ? L : leaves.segOffset[localLeafIdx + 1];
 				onRight = false;
 				for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
-					if (isInteriorRemoved(interiors.alterState[interiorIdx]))
+					if (isInteriorRemoved(interiors.removeState[interiorIdx]))
 					 	return;
 					
 					int splitDim = interiors.splitDim[interiorIdx];
@@ -127,24 +123,27 @@ namespace pmkd {
 			onRight = false;
 
 			// skip if box does not overlap the subtree rooted at L
-			if (L < R) {
+			if (L > 0 && L < R) {
 				splitDim = interiors.parentSplitDim[L];
 				if (splitDim >= 0) {
 					splitVal = interiors.parentSplitVal[L];
-					if (box.ptMax[splitDim] < splitVal) continue;
+					if (box.ptMax[splitDim] < splitVal) {
+						begin = interiors.rangeR[L];
+						continue;
+					}
 				}
 			}
 
 			for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
-				onRight = isInteriorRemoved(interiors.alterState[interiorIdx]); // removed
-				if (!onRight) {
+				bool isRemoved = isInteriorRemoved(interiors.removeState[interiorIdx]); // removed
+				if (!isRemoved) {
 					splitDim = interiors.splitDim[interiorIdx];
 					splitVal = interiors.splitVal[interiorIdx];
 
 					onRight = box.ptMin[splitDim] >= splitVal;
 				}
 
-				if (onRight) {
+				if (isRemoved || onRight) {
 					// goto right child
 					//begin = interiorIdx < R - 1 ? 
 					//	interiors.rangeR[interiorIdx + 1] + 1 : interiors.rangeR[interiorIdx];
@@ -207,27 +206,30 @@ namespace pmkd {
 
 				L = leaves.segOffset[localLeafIdx];
 				R = localLeafIdx == rBound - 1 ? L : leaves.segOffset[localLeafIdx + 1];
-				onRight = false;
-
+				bool isLeftMost = L == 0 || interiors.mapidx[localLeafIdx - 1] == -1;
 				
-				if (L < R) {
+				onRight = false;
+				
+				if (!isLeftMost && L < R) {
 					splitDim = interiors.parentSplitDim[L];
 					if (splitDim >= 0) {
 						splitVal = interiors.parentSplitVal[L];
-						if (box.ptMax[splitDim] < splitVal)
+						if (box.ptMax[splitDim] < splitVal) {
+							localLeafIdx = interiors.rangeR[L];
 							continue;
+						}
 					}
 				}
 
 				for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
-					onRight = isInteriorRemoved(interiors.alterState[interiorIdx]);
-					if (!onRight) {
+					bool isRemoved = isInteriorRemoved(interiors.removeState[interiorIdx]);   // note: judging removaL may not increase performance
+					if (!isRemoved) {
 						splitDim = interiors.splitDim[interiorIdx];
 						splitVal = interiors.splitVal[interiorIdx];
 						onRight = box.ptMin[splitDim] >= splitVal;
 					}
 
-					if (onRight) {
+					if (isRemoved || onRight) {
 						// goto right child
 						localLeafIdx = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : localLeafIdx;
 						break;

@@ -1,3 +1,4 @@
+#include <tree/device_helper.h>
 #include <tree/kernel.h>
 
 namespace pmkd {
@@ -42,7 +43,8 @@ namespace pmkd {
 		if (idx >= leafSize) return;
 
 		int parent;
-		if (idx == 0 || (idx < leafSize - 1 && interiors.metrics[idx - 1] > interiors.metrics[idx])) {
+		bool isRC = idx != 0 && (idx == leafSize - 1 || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
+		if (!isRC) {
 			// is left child of Interior idx
 			parent = idx;
 			//leaves.parentSplitDim[idx] = interiors.splitDim[parent];
@@ -65,7 +67,7 @@ namespace pmkd {
 
 		// choose parent in bottom-up fashion. O(n)
 		int current, left, right;
-		while (aid.visitCount[parent].cnt++ == 1) {
+		while (setVisitCountBottomUp(aid, parent, isRC)) {
 			current = parent;
 
 			left = interiors.rangeL[current];
@@ -76,7 +78,8 @@ namespace pmkd {
 				break;
 			}
 
-			if (left == 0 || (right < leafSize - 1 && interiors.metrics[left - 1] > interiors.metrics[right])) {
+			isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
+			if (!isRC) {
 				// is left child of Interior right
 				parent = right;
 				//interiors.parent[current] = parent;
@@ -108,22 +111,22 @@ namespace pmkd {
 		
 		if (idx >= leafSize) return;
 
-		int criteria = idx != 0 && (idx == leafSize - 1 || metrics[idx - 1] <= metrics[idx]); // 1 if is right child
-		int parent = idx - criteria;
+		int isRC = idx != 0 && (idx == leafSize - 1 || metrics[idx - 1] <= metrics[idx]); // 1 if is right child
+		int parent = idx - isRC;
 		//leaves.parentSplitDim[idx] = interiors.splitDim[parent];
 		//leaves.parentSplitVal[idx] = interiors.splitVal[parent];
 
-		aid.segLen[idx] = 1 - criteria;
-		aid.leftLeafCount[idx] = 1 - criteria;
+		aid.segLen[idx] = 1 - isRC;
+		aid.leftLeafCount[idx] = 1 - isRC;
 
 		// note: this may not be a useful optimization
 		// rangeL or rangeR
-		int* rangePtr = range[criteria];
+		int* rangePtr = range[isRC];
 		rangePtr[parent] = idx;
 
 		// choose parent in bottom-up fashion. O(n)
 		int current, left, right;
-		while (aid.visitCount[parent].cnt++ == 1) {
+		while (setVisitCountBottomUp(aid, parent, isRC)) {
 			current = parent;
 
 			int LR[2] = { range[0][current] ,range[1][current] };  // left, right
@@ -135,10 +138,10 @@ namespace pmkd {
 				parentSplitDim[current] = -1;
 				break;
 			}
-			criteria = left != 0 && (right == leafSize - 1 || metrics[left - 1] <= metrics[right]); // 1 if is right child
-			parent = LR[1 - criteria] - criteria;
-			range[criteria][parent] = LR[criteria];
-			if (!criteria) {
+			isRC = left != 0 && (right == leafSize - 1 || metrics[left - 1] <= metrics[right]); // 1 if is right child
+			parent = LR[1 - isRC] - isRC;
+			range[isRC][parent] = LR[isRC];
+			if (!isRC) {
 				aid.segLen[left]++;  // add LCL value of the leftmost leaf
 				aid.leftLeafCount[parent] = aid.segLen[left]; // count the order of Interior parent
 			}

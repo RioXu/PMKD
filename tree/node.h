@@ -14,10 +14,18 @@ namespace pmkd {
 	using vector = std::vector<T>;
 
 	struct AtomicCount {
-		std::atomic<int> cnt;  // size is 4
-		//char pack[60];       // note: this optimization may not be necessary
+		std::atomic<uint8_t> cnt;  // size is 1
+		//char pack[63];       // note: this optimization may not be necessary
 
 		AtomicCount() : cnt(0) {}
+	};
+	// using atomic_t = std::atomic<int>;
+	using atomic_t = std::atomic_uint8_t;
+
+	using BottomUpState = atomic_t;
+
+	struct TopDownStates {
+		uint8_t* __restrict_arr child[2];
 	};
 
 	// using Structure of Arrays (SOA) pattern
@@ -40,7 +48,9 @@ namespace pmkd {
 		// for dynamic tree
 		uint8_t* __restrict_arr metrics;
 		int* __restrict_arr mapidx;
-		AtomicCount* __restrict_arr alterState;
+		BottomUpState* __restrict_arr removeState;
+		BottomUpState* __restrict_arr visitState;
+		TopDownStates visitStateTopDown;
 	};
 
 	struct Leaves {
@@ -125,8 +135,12 @@ namespace pmkd {
 		// for dynamic tree
 		vector<uint8_t> metrics;
 		vector<int> mapidx;   // original index to optimized layout index
-		// 1b: lc visit, 10b: rc visit, 100b: lc removal, 1000b: rc removal
-		vector<AtomicCount> alterState;
+		// remove states
+		// 01b: lc removed, 10b: rc removed, 11b: both removed
+		vector<BottomUpState> removeState;
+		vector<BottomUpState> visitState;  // clear before use
+		vector<uint8_t> vsLeftChild;
+		vector<uint8_t> vsRightChild;
 
 		Interiors() = default;
 		Interiors(Interiors&&) = default;
@@ -159,8 +173,14 @@ namespace pmkd {
 			parentSplitVal.resize(size);
 
 			metrics.resize(size);
-            mapidx.resize(size);
-            alterState = vector<AtomicCount>(size);
+			mapidx.resize(size);
+			
+			removeState = vector<BottomUpState>(size);
+			visitState = vector<BottomUpState>(size);
+			vsLeftChild.clear();
+			vsLeftChild.resize(size, 0);
+			vsRightChild.clear();
+			vsRightChild.resize(size, 0);
 		}
 
 		// void append(const Interiors& other) {
@@ -187,10 +207,10 @@ namespace pmkd {
 
 			res.metrics = metrics;
 			res.mapidx = mapidx;
-			res.alterState = vector<AtomicCount>(alterState.size());
-			for (size_t i = 0; i < alterState.size(); ++i) {
-                res.alterState[i].cnt = alterState[i].cnt.load();
-            }
+			res.removeState = vector<BottomUpState>(removeState.size());
+			for (size_t i = 0; i < removeState.size(); ++i) {
+				res.removeState[i] = removeState[i].load(std::memory_order_relaxed);
+			}
 			return res;
 		}
 
@@ -200,7 +220,9 @@ namespace pmkd {
 				splitDim.data() + offset,splitVal.data() + offset,
 				parentSplitDim.data() + offset,parentSplitVal.data() + offset,
 				metrics.data() + offset, mapidx.data() + offset,
-				alterState.data() + offset
+				removeState.data() + offset,
+				visitState.data() + offset,
+				{vsLeftChild.data() + offset, vsRightChild.data() + offset} 
 			};
 		}
 
@@ -209,8 +231,13 @@ namespace pmkd {
 				const_cast<int*>(rangeL.data())+offset, const_cast<int*>(rangeR.data())+offset,
 				const_cast<int*>(splitDim.data())+offset,const_cast<mfloat*>(splitVal.data())+offset,
 				const_cast<int*>(parentSplitDim.data()) + offset,const_cast<mfloat*>(parentSplitVal.data()) + offset,
-				const_cast<uint8_t*>(metrics.data())+offset, const_cast<int*>(mapidx.data())+offset,
-                const_cast<AtomicCount*>(alterState.data())+offset
+				const_cast<uint8_t*>(metrics.data()) + offset, const_cast<int*>(mapidx.data()) + offset,
+				const_cast<BottomUpState*>(removeState.data()) + offset,
+				const_cast<BottomUpState*>(visitState.data()) + offset,
+				{
+					const_cast<uint8_t*>(vsLeftChild.data()) + offset,
+				    const_cast<uint8_t*>(vsRightChild.data()) + offset
+				}
 			};
 		}
 	};

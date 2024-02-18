@@ -83,9 +83,10 @@ namespace pmkd {
 		);
 
 		auto visitCount = vector<AtomicCount>(ptNum - 1);
+
 		auto innerBuf = bufferPool->acquire<int>(ptNum - 1, 0);
 		auto leafBuf = bufferPool->acquire<int>(ptNum, 0);
-		BuildAid aid{ visitCount.data(),innerBuf.data(),leafBuf.data() };
+		BuildAid aid{ visitCount.data(), innerBuf.data(),leafBuf.data() };
 
 		// build interior nodes
 		// note: the following optimization does not prove better on CPU
@@ -239,6 +240,11 @@ namespace pmkd {
 		mergeZip(primIdx, leafIdxMortonSorted, binIdx, combinedPrimIdx, combinedBinIdx,
 			[&](const auto& idx1, const auto& idx2) {
 				return getMortonCode(idx1) < getMortonCode(idx2);
+			});
+
+		// revert removal of bins to insert
+		parlay::parallel_for(0, leafIdxLeafSorted.size(), [&](size_t i) {
+			UpdateKernel::revertRemoval(i, leafIdxLeafSorted.size(), leafIdxLeafSorted.data(), nodeMgrDevice);
 		});
 
 		// allocate memory for final insertion
@@ -297,7 +303,7 @@ namespace pmkd {
 		);
 		bufferPool->release<vec3f>(std::move(ptsAddSorted));
 
-		// set final mortons to add
+		// set final mortons to add, set removal
 		parlay::parallel_for(0, batchLeafSize,
 			[&](size_t i) {
 				int gi = finalPrimIdx[i];
@@ -306,6 +312,8 @@ namespace pmkd {
 					int iBatch, _offset;
 					transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
 					leaves.morton[i] = nodeMgrDevice.leavesBatch[iBatch].morton[_offset];
+					int r = nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset];
+					leaves.replacedBy[i] = r; // set removal
 				}
 			}
 		);
@@ -319,12 +327,12 @@ namespace pmkd {
 		});
 		parlay::scan_inplace(interiorCount);
 
-		// set replacedBy
+		// set replacedBy of leafbins
 		parlay::parallel_for(0, leafIdxLeafSorted.size(), [&](size_t i) {
 			int gi = leafIdxLeafSorted[i];
 			int iBatch, _offset;
 			transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
-			MASSERT(nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset] > 0);
+			
 			nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset] = ptNum + interiorCount[i] + i;
 		});
 
@@ -351,9 +359,10 @@ namespace pmkd {
 		// build interiors
 		
 		auto visitCount = std::vector<AtomicCount>(batchLeafSize - 1);
+
 		auto innerBuf = bufferPool->acquire<int>(batchLeafSize - 1, 0);
 		auto leafBuf = bufferPool->acquire<int>(batchLeafSize, 0);
-		BuildAid aid{ visitCount.data(),innerBuf.data(),leafBuf.data() };
+		BuildAid aid{ visitCount.data(), innerBuf.data(),leafBuf.data() };
 
 		// build interior nodes
 		// note: the following optimization does not prove better on CPU
@@ -549,9 +558,10 @@ namespace pmkd {
 		);
 
 		auto visitCount = vector<AtomicCount>(ptNum - 1);
+		
 		auto innerBuf = bufferPool->acquire<int>(ptNum - 1, 0);
 		auto leafBuf = bufferPool->acquire<int>(ptNum, 0);
-		BuildAid aid{ visitCount.data(),innerBuf.data(),leafBuf.data() };
+		BuildAid aid{ visitCount.data(), innerBuf.data(),leafBuf.data() };
 
 		// build interior nodes
 		// note: the following optimization does not prove better on CPU
@@ -964,11 +974,9 @@ namespace pmkd {
 		return responses;
 	}
 
-	RangeQueryResponses PMKDTree::query(const vector<RangeQuery>& queries) const {
-		if (queries.empty()) return RangeQueryResponses(0);
-		
+
+	void PMKDTree::_query(const vector<RangeQuery>& queries, RangeQueryResponses& responses) const {
 		size_t nq = queries.size();
-		RangeQueryResponses responses(nq);
 
 		vector<RangeQuery> queriesSorted;
 		const RangeQuery* target = queries.data();
@@ -976,7 +984,7 @@ namespace pmkd {
 		if (config.optimize) {
 			vector<vec3f> centers(nq);
 			parlay::parallel_for(0, nq,
-                [&](size_t i) { centers[i] = queries[i].center(); }
+				[&](size_t i) { centers[i] = queries[i].center(); }
 			);
 
 			vector<MortonType> morton(nq);
@@ -987,7 +995,7 @@ namespace pmkd {
 			// note: there are multiple sorting algorithms to choose from
 			parlay::integer_sort_inplace(
 				responses.queryIdx, [&](const auto& idx) {return morton[idx].code;});
-			
+
 			queriesSorted.resize(nq);
 			parlay::parallel_for(0, nq, [&](size_t i) {queriesSorted[i] = queries[responses.queryIdx[i]];});
 
@@ -1013,8 +1021,16 @@ namespace pmkd {
 				SearchKernel::searchRanges(i, nq, target,
 				nodeMgr->getDeviceHandle(), primSize(), sceneBoundary,
 				responses.getRawRepr());
-			});
+				});
 		}
+	}
+
+	RangeQueryResponses PMKDTree::query(const vector<RangeQuery>& queries) const {
+		if (queries.empty()) return RangeQueryResponses(0);
+		
+		RangeQueryResponses responses(queries.size());
+
+		mTimer("Range Search Time", [&] {this->_query(queries, responses);});
 
 		return responses;
 	}
@@ -1108,7 +1124,7 @@ namespace pmkd {
 			);
 
 			parlay::parallel_for(0, nq, [&](size_t i) {
-                UpdateKernel::removePoints_step2(i, nq, primSize(), binIdx.data(), nodeMgrDeviceHandle);
+                UpdateKernel::removePoints_step2(i, nq, binIdx.data(), nodeMgrDeviceHandle);
 			});
 		}
 		if (!ptsRemoveSorted.empty()) bufferPool->release(std::move(ptsRemoveSorted));

@@ -1,3 +1,4 @@
+#include <tree/device_helper.h>
 #include <tree/kernel.h>
 
 namespace pmkd {
@@ -25,7 +26,8 @@ namespace pmkd {
         int parent;
         bool isLeftMost = idx == lBound;
         bool isRightMost = idx == rBound - 1;
-        if (isLeftMost || (!isRightMost && interiors.metrics[idx - 1] > interiors.metrics[idx])) {
+        bool isRC = !isLeftMost && (isRightMost || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
+        if (!isRC) {
             // is left child of Interior idx
             parent = idx;
             interiors.rangeL[parent] = idx;
@@ -40,7 +42,7 @@ namespace pmkd {
 
         // choose parent in bottom-up fashion. O(n)
         int current, left, right;
-        while (aid.visitCount[parent].cnt++ == 1) {
+        while (setVisitCountBottomUp(aid, parent, isRC)) {
             current = parent;
 
             left = interiors.rangeL[current];
@@ -54,7 +56,8 @@ namespace pmkd {
                 break;
             }
 
-            if (isLeftMost || (!isRightMost && interiors.metrics[left - 1] > interiors.metrics[right])) {
+            isRC = !isLeftMost && (isRightMost || interiors.metrics[left - 1] <= interiors.metrics[right]);
+            if (!isRC) {
                 // is left child of Interior right
                 parent = right;
                 interiors.rangeL[parent] = left;

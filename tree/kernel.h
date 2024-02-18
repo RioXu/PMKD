@@ -91,6 +91,7 @@ namespace pmkd {
 	};
 
 	struct UpdateKernel {
+		// for insertion
 		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
 			const InteriorsRawRepr interiors, const LeavesRawRepr leaves,
 			OUTPUT(int*) binIdx);
@@ -102,15 +103,20 @@ namespace pmkd {
 		static void findLeafBin(int qIdx, int qSize, const vec3f* qPts, int totalLeafSize,
 			const NodeMgrDevice nodeMgr, OUTPUT(int*) binIdx);
 
+		static void revertRemoval(int qIdx, int qSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr);
+
+		// for removal
 		static void removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const vec3f* pts, int leafSize,
 			InteriorsRawRepr interiors, LeavesRawRepr leaves, OUTPUT(int*) binIdx);
 
-		static void removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const NodeMgrDevice nodeMgr, int totalLeafSize, OUTPUT(int*) binIdx);
+		static void removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const NodeMgrDevice nodeMgr,
+			int totalLeafSize, OUTPUT(int*) binIdx);
 
 		static void removePoints_step2(int rIdx, int rSize, int leafSize, INPUT(int*) binIdx, const LeavesRawRepr leaves,
 			InteriorsRawRepr interiors);
 		
-		static void removePoints_step2(int rIdx, int rSize, int totalLeafSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr);
+		static void removePoints_step2(int rIdx, int rSize, INPUT(int*) binIdx,
+			NodeMgrDevice nodeMgr);
 	};
 
 	struct VerifyKernel {

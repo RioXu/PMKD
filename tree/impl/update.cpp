@@ -1,9 +1,10 @@
 #include <common/util/atomic_ext.h>
 #include <tree/helper.h>
+#include <tree/device_helper.h>
 #include <tree/kernel.h>
 
 namespace pmkd {
-    
+
     void UpdateKernel::findLeafBin(int qIdx, int qSize, const vec3f* qPts, int leafSize,
         const InteriorsRawRepr interiors, const LeavesRawRepr leaves,
         OUTPUT(int*) binIdx) {
@@ -114,7 +115,7 @@ namespace pmkd {
             transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
 
             const auto& leaves = nodeMgr.leavesBatch[iBatch];
-            const auto& interiors = nodeMgr.interiorsBatch[iBatch];
+            auto& interiors = nodeMgr.interiorsBatch[iBatch];
 
             int rBound = iBatch == 0 ? mainTreeLeafSize : leaves.treeLocalRangeR[localLeafIdx];
 
@@ -128,6 +129,7 @@ namespace pmkd {
                     int splitDim = interiors.splitDim[interiorIdx];
                     mfloat splitVal = interiors.splitVal[interiorIdx];
                     onRight = pt[splitDim] >= splitVal;
+                    
                     if (onRight) {
                         // goto right child
                         localLeafIdx = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : localLeafIdx;
@@ -150,38 +152,53 @@ namespace pmkd {
         }
     }
 
-    inline void setVisitFlag(AtomicCount& alterState, bool fromRC) {
-        alterState.cnt |= (1 << fromRC);
-    }
+    void UpdateKernel::revertRemoval(int qIdx, int qSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr) {
+        if (qIdx >= qSize) return;
 
-    // inline bool unsetVisitFlag(AtomicCount& alterState, bool fromRC) {
-    //     int bit = 1 << fromRC;
-    //     int oldState = alterState.cnt.fetch_xor(bit) & 0b11;
-    //     //assert(((oldState>>fromRC)&1) == 1);
-    //     //return (alterState.cnt.fetch_xor(bit) & 0b11) == bit;
-    //     return oldState == bit;
-    // }
+        int globalLeafIdx = binIdx[qIdx];
 
-    // return: is unvisited after modification
-    inline bool unsetVisitFlag(AtomicCount& alterState, bool fromRC) {
-        int bit = 1 << fromRC;
-        int oldState = alterState.cnt.fetch_and(~bit) & 0b11;
-        return oldState == bit;
-    }
+        int mainTreeLeafSize = nodeMgr.sizesAcc[0];
 
-    // return: is removed after modification
-    // inline bool setRemoveFlag(AtomicCount& alterState, bool fromRC) {
-    //     int bit = 0b100 << fromRC;
-    //     return (alterState.cnt.fetch_or(bit) & 0b1100) == 0b1100;
-    // }
-    inline void setRemoveFlag(AtomicCount& alterState, bool fromRC) {
-        alterState.cnt |= (0b100 << fromRC);
-    }
+        while (true) {
+            int iBatch, localLeafIdx;
+            transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
+            const auto& leaves = nodeMgr.leavesBatch[iBatch];
+            auto& interiors = nodeMgr.interiorsBatch[iBatch];
 
-    inline bool isInteriorRemoved(const AtomicCount& alterState) {
-        int state = alterState.cnt.load(std::memory_order_relaxed);
-        return (state & 0b1100) == 0b1100;
+            int rBound = iBatch == 0 ? mainTreeLeafSize : nodeMgr.leavesBatch[iBatch].treeLocalRangeR[localLeafIdx];
+            bool isLeftMost = localLeafIdx == 0 || (interiors.mapidx[localLeafIdx - 1] == -1);
+            bool isRightMost = localLeafIdx == rBound - 1;
+
+            bool isRC = !isLeftMost && (isRightMost || interiors.metrics[localLeafIdx - 1] <= interiors.metrics[localLeafIdx]);
+            int parent = interiors.mapidx[localLeafIdx - isRC];
+            //if (isSubRootVisited)
+            //    unsetRemoveStateBottomUp(interiors.removeState[parent], isRC);
+
+            // choose parent in bottom-up fashion. O(n)
+            int current, left, right;
+            while (unsetRemoveStateBottomUp(interiors.removeState[parent], isRC)) {
+                current = parent;
+
+                int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
+                const auto& left = LR[0];
+                const auto& right = LR[1];
+
+                isLeftMost = left == 0 || (interiors.mapidx[left - 1] == -1);
+                isRightMost = right == rBound - 1;
+
+                if (isLeftMost && isRightMost) {
+                    break;
+                }
+
+                isRC = !isLeftMost && (isRightMost || interiors.metrics[left - 1] <= interiors.metrics[right]);
+                parent = interiors.mapidx[LR[1 - isRC] - isRC];
+            }
+            if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
+
+            globalLeafIdx = leaves.derivedFrom[localLeafIdx];
+        }
     }
+    
 
     void UpdateKernel::removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const vec3f* pts, int leafSize,
         InteriorsRawRepr interiors, LeavesRawRepr leaves, OUTPUT(int*) binIdx) {
@@ -202,7 +219,7 @@ namespace pmkd {
                 mfloat splitVal = interiors.splitVal[interiorIdx];
                 onRight = pt[splitDim] >= splitVal;
 
-                setVisitFlag(interiors.alterState[interiorIdx], onRight);
+                setVisitStateTopDown(interiors.visitStateTopDown, interiorIdx, onRight);
                 if (onRight) {
                     // goto right child
                     //begin = interiorIdx < R - 1 ? 
@@ -221,7 +238,8 @@ namespace pmkd {
         }
     }
 
-    void UpdateKernel::removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const NodeMgrDevice nodeMgr, int totalLeafSize, OUTPUT(int*) binIdx) {
+    void UpdateKernel::removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const NodeMgrDevice nodeMgr,
+        int totalLeafSize, OUTPUT(int*) binIdx) {
 
         if (rIdx >= rSize) return;
         const vec3f& pt = rPts[rIdx];
@@ -239,7 +257,7 @@ namespace pmkd {
             transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
 
             const auto& leaves = nodeMgr.leavesBatch[iBatch];
-            const auto& interiors = nodeMgr.interiorsBatch[iBatch];
+            auto& interiors = nodeMgr.interiorsBatch[iBatch];
             //const auto& treeLocalRangeR = nodeMgr.treeLocalRangeR[iBatch];
 
             int rBound = iBatch == 0 ? mainTreeLeafSize : leaves.treeLocalRangeR[localLeafIdx];
@@ -255,7 +273,7 @@ namespace pmkd {
                     mfloat splitVal = interiors.splitVal[interiorIdx];
                     onRight = pt[splitDim] >= splitVal;
 
-                    setVisitFlag(interiors.alterState[interiorIdx], onRight);
+                    setVisitStateTopDown(interiors.visitStateTopDown, interiorIdx, onRight);
                     if (onRight) {
                         // goto right child
                         localLeafIdx = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : localLeafIdx;
@@ -286,11 +304,13 @@ namespace pmkd {
 
         bool isRC = idx != 0 && (idx == leafSize - 1 || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
         int parent = interiors.mapidx[idx - isRC];
-        setRemoveFlag(interiors.alterState[parent], isRC);
+        setRemoveStateBottomUp(interiors.removeState[parent], isRC);
 
         // choose parent in bottom-up fashion. O(n)
         int current, left, right;
-        while (unsetVisitFlag(interiors.alterState[parent], isRC)) {
+        while (unsetVisitStateBottomUp(interiors.visitStateTopDown, parent,
+            interiors.visitState[parent], isRC))
+        {
             current = parent;
 
             if (current == 0) break; // root
@@ -302,12 +322,12 @@ namespace pmkd {
             isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
             parent = interiors.mapidx[LR[1 - isRC] - isRC];
 
-            if (isInteriorRemoved(interiors.alterState[current]))
-                setRemoveFlag(interiors.alterState[parent], isRC);
+            if (isInteriorRemoved(interiors.removeState[current]))
+                setRemoveStateBottomUp(interiors.removeState[parent], isRC);
         }
     }
 
-    void UpdateKernel::removePoints_step2(int rIdx, int rSize, int totalLeafSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr) {
+    void UpdateKernel::removePoints_step2(int rIdx, int rSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr) {
         
         if (rIdx >= rSize) return;
         int globalLeafIdx = binIdx[rIdx];
@@ -320,7 +340,7 @@ namespace pmkd {
             int iBatch, localLeafIdx;
             transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
             const auto& leaves = nodeMgr.leavesBatch[iBatch];
-            const auto& interiors = nodeMgr.interiorsBatch[iBatch];
+            auto& interiors = nodeMgr.interiorsBatch[iBatch];
 
             int rBound = iBatch == 0 ? mainTreeLeafSize : nodeMgr.leavesBatch[iBatch].treeLocalRangeR[localLeafIdx];
             bool isLeftMost = localLeafIdx == 0 || (interiors.mapidx[localLeafIdx - 1] == -1);
@@ -329,11 +349,13 @@ namespace pmkd {
             bool isRC = !isLeftMost && (isRightMost || interiors.metrics[localLeafIdx - 1] <= interiors.metrics[localLeafIdx]);
             int parent = interiors.mapidx[localLeafIdx - isRC];
             if (isSubRootRemoved)
-                setRemoveFlag(interiors.alterState[parent], isRC);
+                setRemoveStateBottomUp(interiors.removeState[parent], isRC);
             
             // choose parent in bottom-up fashion. O(n)
             int current, left, right;
-            while (unsetVisitFlag(interiors.alterState[parent], isRC)) {
+            while (unsetVisitStateBottomUp(interiors.visitStateTopDown, parent,
+                interiors.visitState[parent], isRC))
+            {
                 current = parent;
 
                 int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
@@ -350,12 +372,12 @@ namespace pmkd {
                 isRC = !isLeftMost && (isRightMost || interiors.metrics[left - 1] <= interiors.metrics[right]);
                 parent = interiors.mapidx[LR[1 - isRC] - isRC];
 
-                if (isInteriorRemoved(interiors.alterState[current]))
-                    setRemoveFlag(interiors.alterState[parent], isRC);
+                if (isInteriorRemoved(interiors.removeState[current]))
+                    setRemoveStateBottomUp(interiors.removeState[parent], isRC);
             }
             if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
 
-            isSubRootRemoved = isInteriorRemoved(interiors.alterState[current]);
+            isSubRootRemoved = isInteriorRemoved(interiors.removeState[current]);
             globalLeafIdx = leaves.derivedFrom[localLeafIdx];
         }
     }
