@@ -23,8 +23,8 @@
 
 #include <common/geometry/aabb.h>
 #include <common/util/utils.h>
+#include <pmkd_headers.h>
 #include <tree/kernel.h>
-#include <pm_kdtree.h>
 
 
 using namespace pmkd;

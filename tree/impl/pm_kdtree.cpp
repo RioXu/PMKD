@@ -47,8 +47,7 @@ namespace pmkd {
 
 		// init leaves
 		Leaves leaves;
-		leaves.morton.resize(ptNum);
-		leaves.replacedBy.resize(ptNum, 0); // note: can be async
+		leaves.resizePartial(ptNum);  // note: can be async
 		//leaves.segOffset.resize(ptNum);
 
 		// init interiors
@@ -207,20 +206,21 @@ namespace pmkd {
 		);
 		bufferPool->release<MortonType>(std::move(morton));
 
+		auto nodeMgrDevice = nodeMgr->getDeviceHandle();
 		// find leaf bin
 		int maxBin = -1;
 		parlay::parallel_for(0, sizeInc,
 			[&](size_t i) {
 				UpdateKernel::findLeafBin(
 					i, sizeInc, ptsAddSorted.data(), primSize(),
-					nodeMgr->getDeviceHandle(), binIdx.data());
+					nodeMgrDevice, binIdx.data());
 		});
 		maxBin = parlay::reduce(binIdx, parlay::maximum<int>());
 
 		// reset primIdx
 		parlay::parallel_for(0, sizeInc, [&](uint32_t i) {return primIdx[i] = ptNum + i;});
 
-		auto nodeMgrDevice = nodeMgr->getDeviceHandle();
+		
 		auto getMortonCode = [&](int gi) {
 			if (gi >= ptNum) return mortonSorted[gi - ptNum].code;
 
@@ -250,10 +250,9 @@ namespace pmkd {
 		// allocate memory for final insertion
 		// note: can be async
 		Leaves leaves;
-		leaves.morton.resize(batchLeafSize);
+		leaves.resizePartial(batchLeafSize);
 		leaves.treeLocalRangeR.resize(batchLeafSize);
 		leaves.derivedFrom.resize(batchLeafSize);
-		leaves.replacedBy.resize(batchLeafSize, 0);
 
 		Interiors interiors;
 		interiors.resize(batchLeafSize-1);
@@ -312,11 +311,15 @@ namespace pmkd {
 					int iBatch, _offset;
 					transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
 					leaves.morton[i] = nodeMgrDevice.leavesBatch[iBatch].morton[_offset];
+					// set removal
 					int r = nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset];
-					leaves.replacedBy[i] = r; // set removal
+					leaves.replacedBy[i] = r; 
 				}
 			}
 		);
+		// note: leaf hash calculation can be boost
+		// by recording leafBinIdx2finalPrimIdx and copying hash
+		// to avoid some costly hash calculation
 		bufferPool->release<int>(std::move(finalPrimIdx));
 		bufferPool->release<MortonType>(std::move(mortonSorted));
 
@@ -544,6 +547,9 @@ namespace pmkd {
 		ptNum = leaves.size();
 
 		leaves.replacedBy.resize(ptNum, 0);
+#ifdef ENABLE_MERKLE
+		leaves.hash.resize(ptNum);
+#endif
 
 		interiors.resize(ptNum - 1);
 

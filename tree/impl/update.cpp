@@ -129,6 +129,9 @@ namespace pmkd {
                     int splitDim = interiors.splitDim[interiorIdx];
                     mfloat splitVal = interiors.splitVal[interiorIdx];
                     onRight = pt[splitDim] >= splitVal;
+#ifdef ENABLE_MERKLE
+                    setVisitStateTopDown(interiors.visitStateTopDown, interiorIdx, onRight);
+#endif
                     
                     if (onRight) {
                         // goto right child
@@ -171,11 +174,9 @@ namespace pmkd {
 
             bool isRC = !isLeftMost && (isRightMost || interiors.metrics[localLeafIdx - 1] <= interiors.metrics[localLeafIdx]);
             int parent = interiors.mapidx[localLeafIdx - isRC];
-            //if (isSubRootVisited)
-            //    unsetRemoveStateBottomUp(interiors.removeState[parent], isRC);
 
             // choose parent in bottom-up fashion. O(n)
-            int current, left, right;
+            int current = -1, left, right;
             while (unsetRemoveStateBottomUp(interiors.removeState[parent], isRC)) {
                 current = parent;
 
@@ -219,12 +220,12 @@ namespace pmkd {
                 mfloat splitVal = interiors.splitVal[interiorIdx];
                 onRight = pt[splitDim] >= splitVal;
 
+#ifdef ENABLE_MERKLE
                 setVisitStateTopDown(interiors.visitStateTopDown, interiorIdx, onRight);
+#endif
+                
                 if (onRight) {
                     // goto right child
-                    //begin = interiorIdx < R - 1 ? 
-                    //	interiors.rangeR[interiorIdx + 1] + 1 : begin+1;
-                    //begin--;
                     begin = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : begin;
                     break;
                 }
@@ -273,7 +274,9 @@ namespace pmkd {
                     mfloat splitVal = interiors.splitVal[interiorIdx];
                     onRight = pt[splitDim] >= splitVal;
 
+#ifdef ENABLE_MERKLE
                     setVisitStateTopDown(interiors.visitStateTopDown, interiorIdx, onRight);
+#endif
                     if (onRight) {
                         // goto right child
                         localLeafIdx = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : localLeafIdx;
@@ -304,12 +307,34 @@ namespace pmkd {
 
         bool isRC = idx != 0 && (idx == leafSize - 1 || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
         int parent = interiors.mapidx[idx - isRC];
-        setRemoveStateBottomUp(interiors.removeState[parent], isRC);
-
-        // choose parent in bottom-up fashion. O(n)
         int current, left, right;
-        while (unsetVisitStateBottomUp(interiors.visitStateTopDown, parent,
-            interiors.visitState[parent], isRC))
+
+#ifdef ENABLE_MERKLE
+        const hash_t* childHash = leaves.hash + idx;
+        while (setVisitStateBottomUp(interiors.visitStateTopDown, parent, interiors.visitState[parent], isRC)) {
+            clearVisitStateTopDown(interiors.visitStateTopDown, parent);
+
+            current = parent;
+
+            int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
+            const auto& left = LR[0];
+            const auto& right = LR[1];
+
+            const hash_t* otherChildHash;
+            getOtherChildHash(leaves, interiors, left, current, leafSize, isRC, otherChildHash);
+
+            computeDigest(interiors.hash + current, childHash, otherChildHash,
+                interiors.splitDim[current], interiors.splitVal[current]);
+
+            if (current == 0) break; // root
+
+            childHash = interiors.hash + current;
+
+            isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
+            parent = interiors.mapidx[LR[1 - isRC] - isRC];
+        }
+#else
+        while (setCheckRemoveStateBottomUp(interiors.removeState[parent], isRC))
         {
             current = parent;
 
@@ -321,10 +346,8 @@ namespace pmkd {
 
             isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
             parent = interiors.mapidx[LR[1 - isRC] - isRC];
-
-            if (isInteriorRemoved(interiors.removeState[current]))
-                setRemoveStateBottomUp(interiors.removeState[parent], isRC);
         }
+#endif
     }
 
     void UpdateKernel::removePoints_step2(int rIdx, int rSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr) {
@@ -333,8 +356,6 @@ namespace pmkd {
         int globalLeafIdx = binIdx[rIdx];
 
         int mainTreeLeafSize = nodeMgr.sizesAcc[0];
-
-        bool isSubRootRemoved = true;
 
         while (true) {
             int iBatch, localLeafIdx;
@@ -348,20 +369,34 @@ namespace pmkd {
 
             bool isRC = !isLeftMost && (isRightMost || interiors.metrics[localLeafIdx - 1] <= interiors.metrics[localLeafIdx]);
             int parent = interiors.mapidx[localLeafIdx - isRC];
-            if (isSubRootRemoved)
-                setRemoveStateBottomUp(interiors.removeState[parent], isRC);
             
             // choose parent in bottom-up fashion. O(n)
-            int current, left, right;
-            while (unsetVisitStateBottomUp(interiors.visitStateTopDown, parent,
-                interiors.visitState[parent], isRC))
+            int current = -1;
+#ifdef ENABLE_MERKLE
+            const hash_t* childHash = leaves.hash + localLeafIdx;
+            while (setVisitStateBottomUp(interiors.visitStateTopDown, parent, interiors.visitState[parent], isRC))
             {
+                clearVisitStateTopDown(interiors.visitStateTopDown, parent);
+#else
+            while (setCheckRemoveStateBottomUp(interiors.removeState[parent], isRC))
+            {
+#endif
                 current = parent;
 
                 int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
                 const auto& left = LR[0];
                 const auto& right = LR[1];
 
+#ifdef ENABLE_MERKLE
+                const hash_t* otherChildHash;
+                getOtherChildHash(leaves, interiors, left, current, rBound, isRC, otherChildHash);
+
+                computeDigest(interiors.hash + current, childHash, otherChildHash,
+                    interiors.splitDim[current], interiors.splitVal[current]);
+
+                childHash = interiors.hash + current;
+#endif
+                
                 isLeftMost = left == 0 || (interiors.mapidx[left - 1] == -1);
                 isRightMost = right == rBound - 1;
 
@@ -371,13 +406,9 @@ namespace pmkd {
 
                 isRC = !isLeftMost && (isRightMost || interiors.metrics[left - 1] <= interiors.metrics[right]);
                 parent = interiors.mapidx[LR[1 - isRC] - isRC];
-
-                if (isInteriorRemoved(interiors.removeState[current]))
-                    setRemoveStateBottomUp(interiors.removeState[parent], isRC);
             }
             if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
 
-            isSubRootRemoved = isInteriorRemoved(interiors.removeState[current]);
             globalLeafIdx = leaves.derivedFrom[localLeafIdx];
         }
     }

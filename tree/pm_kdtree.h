@@ -4,8 +4,8 @@
 #include <memory>
 #include <parlay/sequence.h>
 
-#include "node.h"
-#include "query_response.h"
+#include <node.h>
+#include <query_response.h>
 
 namespace pmkd {
 

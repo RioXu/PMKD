@@ -2,7 +2,11 @@
 #include <atomic>
 #include <parlay/sequence.h>
 #include <vector>
-#include "morton.h"
+
+#include <morton.h>
+#ifdef ENABLE_MERKLE
+#include <auth/sha.h>
+#endif
 
 namespace pmkd {
 	
@@ -21,6 +25,9 @@ namespace pmkd {
 	};
 	// using atomic_t = std::atomic<int>;
 	using atomic_t = std::atomic_uint8_t;
+#ifdef ENABLE_MERKLE
+	using hash_t = SHA192;
+#endif
 
 	using BottomUpState = atomic_t;
 
@@ -36,6 +43,9 @@ namespace pmkd {
 		int* __restrict_arr treeLocalRangeR;
 		int* __restrict_arr replacedBy;
 		int* __restrict_arr derivedFrom;
+#ifdef ENABLE_MERKLE
+		hash_t* __restrict_arr hash;
+#endif
 	};
 
 	struct InteriorsRawRepr {
@@ -49,8 +59,11 @@ namespace pmkd {
 		uint8_t* __restrict_arr metrics;
 		int* __restrict_arr mapidx;
 		BottomUpState* __restrict_arr removeState;
+#ifdef ENABLE_MERKLE
 		BottomUpState* __restrict_arr visitState;
 		TopDownStates visitStateTopDown;
+		hash_t* __restrict_arr hash;
+#endif
 	};
 
 	struct Leaves {
@@ -61,6 +74,9 @@ namespace pmkd {
 		vector<int> treeLocalRangeR;  // exclusive, i.e. [L, R)
 		vector<int> replacedBy; // 0: not replaced, -1: removed, positive: replaced
 		vector<int> derivedFrom;
+#ifdef ENABLE_MERKLE
+		vector<hash_t> hash;
+#endif
 
 		Leaves() = default;
 		Leaves(Leaves&&) = default;
@@ -78,24 +94,26 @@ namespace pmkd {
 			treeLocalRangeR.reserve(capacity);
 			replacedBy.reserve(capacity);
 			derivedFrom.reserve(capacity);
+#ifdef ENABLE_MERKLE
+			hash.reserve(capacity);
+#endif
+		}
+
+		void resizePartial(size_t size) {
+			morton.resize(size);
+			replacedBy.resize(size, 0);
+#ifdef ENABLE_MERKLE
+			hash.resize(size);
+#endif
 		}
 
 		void resize(size_t size) {
-			//primIdx.resize(size);
+			resizePartial(size);
+
 			segOffset.resize(size);
-			morton.resize(size);
 			treeLocalRangeR.resize(size);
-			replacedBy.resize(size);
 			derivedFrom.resize(size);
 		}
-
-		// void append(const Leaves& other) {
-        //     segOffset.append(other.segOffset);
-        //     morton.append(other.morton);
-        //     treeLocalRangeR.append(other.treeLocalRangeR);
-        //     replacedBy.append(other.replacedBy);
-        //     derivedFrom.append(other.derivedFrom);
-		// }
 
 		Leaves copyToHost() const {
 			Leaves res;
@@ -103,8 +121,11 @@ namespace pmkd {
             res.morton = morton;
             res.treeLocalRangeR = treeLocalRangeR;
             res.replacedBy = replacedBy;
-            res.derivedFrom = derivedFrom;
-            return res;
+			res.derivedFrom = derivedFrom;
+#ifdef ENABLE_MERKLE
+			res.hash = hash;
+#endif
+			return res;
 		}
 
 		LeavesRawRepr getRawRepr(size_t offset = 0u) {
@@ -113,7 +134,11 @@ namespace pmkd {
 				morton.data() + offset,
 				treeLocalRangeR.data() + offset,
 				replacedBy.data() + offset,
-				derivedFrom.data() + offset };
+				derivedFrom.data() + offset,
+				#ifdef ENABLE_MERKLE
+				hash.data() + offset,
+                #endif
+			};
 		}
 
 		LeavesRawRepr getRawRepr(size_t offset = 0u) const {
@@ -122,7 +147,11 @@ namespace pmkd {
 				const_cast<MortonType*>(morton.data()) + offset,
 				const_cast<int*>(treeLocalRangeR.data()) + offset,
 				const_cast<int*>(replacedBy.data()) + offset,
-				const_cast<int*>(derivedFrom.data()) + offset };
+				const_cast<int*>(derivedFrom.data()) + offset,
+				#ifdef ENABLE_MERKLE
+				const_cast<hash_t*>(hash.data()) + offset,
+                #endif
+			};
 		}
 	};
 
@@ -138,9 +167,12 @@ namespace pmkd {
 		// remove states
 		// 01b: lc removed, 10b: rc removed, 11b: both removed
 		vector<BottomUpState> removeState;
-		vector<BottomUpState> visitState;  // clear before use
+#ifdef ENABLE_MERKLE
+		vector<BottomUpState> visitState;  // make sure is cleared before use
 		vector<uint8_t> vsLeftChild;
 		vector<uint8_t> vsRightChild;
+		vector<hash_t> hash;
+#endif
 
 		Interiors() = default;
 		Interiors(Interiors&&) = default;
@@ -161,7 +193,11 @@ namespace pmkd {
 
 			metrics.reserve(capacity);
 			mapidx.reserve(capacity);
-			//alterState.reserve(capacity);
+#ifdef ENABLE_MERKLE
+			vsLeftChild.reserve(capacity);
+			vsRightChild.reserve(capacity);
+			hash.reserve(capacity);
+#endif
 		}
 
 		void resize(size_t size) {
@@ -176,25 +212,15 @@ namespace pmkd {
 			mapidx.resize(size);
 			
 			removeState = vector<BottomUpState>(size);
+#ifdef ENABLE_MERKLE
 			visitState = vector<BottomUpState>(size);
 			vsLeftChild.clear();
 			vsLeftChild.resize(size, 0);
 			vsRightChild.clear();
 			vsRightChild.resize(size, 0);
+			hash.resize(size);
+#endif
 		}
-
-		// void append(const Interiors& other) {
-		// 	rangeL.append(other.rangeL);
-        //     rangeR.append(other.rangeR);
-        //     splitDim.append(other.splitDim);
-        //     splitVal.append(other.splitVal);
-        //     parentSplitDim.append(other.parentSplitDim);
-		// 	parentSplitVal.append(other.parentSplitVal);
-
-		// 	metrics.append(other.metrics);
-        //     mapidx.append(other.mapidx);
-        //     //alterState.append(other.alterState);
-		// }
 
 		Interiors copyToHost() const {
 			Interiors res;
@@ -211,6 +237,9 @@ namespace pmkd {
 			for (size_t i = 0; i < removeState.size(); ++i) {
 				res.removeState[i] = removeState[i].load(std::memory_order_relaxed);
 			}
+#ifdef ENABLE_MERKLE
+			res.hash = hash;
+#endif
 			return res;
 		}
 
@@ -221,8 +250,11 @@ namespace pmkd {
 				parentSplitDim.data() + offset,parentSplitVal.data() + offset,
 				metrics.data() + offset, mapidx.data() + offset,
 				removeState.data() + offset,
+				#ifdef ENABLE_MERKLE
 				visitState.data() + offset,
-				{vsLeftChild.data() + offset, vsRightChild.data() + offset} 
+				{vsLeftChild.data() + offset, vsRightChild.data() + offset},
+				hash.data() + offset
+				#endif
 			};
 		}
 
@@ -233,11 +265,14 @@ namespace pmkd {
 				const_cast<int*>(parentSplitDim.data()) + offset,const_cast<mfloat*>(parentSplitVal.data()) + offset,
 				const_cast<uint8_t*>(metrics.data()) + offset, const_cast<int*>(mapidx.data()) + offset,
 				const_cast<BottomUpState*>(removeState.data()) + offset,
+				#ifdef ENABLE_MERKLE
 				const_cast<BottomUpState*>(visitState.data()) + offset,
 				{
 					const_cast<uint8_t*>(vsLeftChild.data()) + offset,
 				    const_cast<uint8_t*>(vsRightChild.data()) + offset
-				}
+				},
+				const_cast<hash_t*>(hash.data()) + offset
+				#endif
 			};
 		}
 	};

@@ -1,4 +1,4 @@
-#include <fmtlog.h>
+#include <exception>
 #include <tree/node.h>
 
 namespace pmkd {
@@ -86,8 +86,7 @@ namespace pmkd {
 
     NodeMgrDevice NodeMgr::getDeviceHandle() const {
         if (!isDeviceSyncronized()) {
-            loge("Device is not syncronized");
-            fmtlog::poll();
+            throw std::runtime_error("Device is not syncronized");
         }
         NodeMgrDevice dNodeMgr;
         dNodeMgr.numBatches = leavesBatch.size();

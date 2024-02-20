@@ -1,6 +1,10 @@
 #pragma once
 #include <vector>
 #include <atomic>
+
+#ifdef ENABLE_MERKLE
+#include "auth/sha.h"
+#endif
 #include "node.h"
 #include "query_response.h"
 
@@ -21,9 +25,7 @@ namespace pmkd {
 
 		static void calcMortonCodes(int idx, int size, INPUT(vec3f*) pts, INPUT(AABB*) gboundary,
 			OUTPUT(MortonType*) morton);
-
-		//static void reorderLeaves(int idx, int size, LeavesRawRepr&& leaves, LeavesRawRepr&& leaves_sorted, int* mapidx);
-
+		
 		static void calcBuildMetrics(int idx, int interiorSize, const AABB& gBoundary, INPUT(MortonType*) morton,
 			OUTPUT(uint8_t*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
 
@@ -45,6 +47,13 @@ namespace pmkd {
 
 		static void reorderInteriors_step2(int idx, int interiorSize, const InteriorsRawRepr interiors,
 			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
+
+#ifdef ENABLE_MERKLE
+		static void calcLeafHash(int idx, int size, INPUT(vec3f*) pts, INPUT(int*) removeFlag, OUTPUT(hash_t*) leafHash);
+
+		static void calcInteriorHash(int idx, int leafSize, const LeavesRawRepr leaves,
+			InteriorsRawRepr interiors, OUTPUT(AtomicCount*) visitCount);
+#endif
 	};
 
 	
@@ -72,6 +81,16 @@ namespace pmkd {
 		static void setSubtreeRootParentSplit(int idx, int numSubTree,
 			INPUT(int*) interiorCount, INPUT(int*) derivedFrom, const NodeMgrDevice nodeMgr, const AABB& gBoundary,
 			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
+
+#ifdef ENABLE_MERKLE
+		static void calcInteriorHash_step1(int idx, int batchLeafSize, INPUT(int*) localRangeL,
+			const LeavesRawRepr leaves, InteriorsRawRepr interiors);
+
+		static void calcInteriorHash_step2(int idx, int binCount, INPUT(int*) leafBinIdx, NodeMgrDevice nodeMgr);
+
+		static void calcInteriorHash_Full(int idx, int batchLeafSize, INPUT(int*) localRangeL, const LeavesRawRepr leaves,
+			InteriorsRawRepr interiors, NodeMgrDevice nodeMgr);
+#endif
 	};
 
 

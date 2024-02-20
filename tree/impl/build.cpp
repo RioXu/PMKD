@@ -17,15 +17,7 @@ namespace pmkd {
 
 		morton[idx] = MortonType::calculate(offset.x, offset.y, offset.z);
 	}
-
-	//void BuildKernel::reorderLeaves(int idx, int size, LeavesRawRepr&& leaves, LeavesRawRepr&& leaves_sorted, int* mapidx) {
-	//	if (idx >= size) return;
-
-	//	int idx_old = mapidx[idx];
-	//	leaves_sorted.primIdx[idx] = idx_old;
-	//	leaves_sorted.morton[idx] = leaves.morton[idx];
-	//}
-
+	
 	void BuildKernel::calcBuildMetrics(int idx, int interiorSize, const AABB& gBoundary, INPUT(MortonType*) morton,
 		OUTPUT(uint8_t*) metrics, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
 		if (idx >= interiorSize) return;
@@ -67,7 +59,7 @@ namespace pmkd {
 
 		// choose parent in bottom-up fashion. O(n)
 		int current, left, right;
-		while (setVisitCountBottomUp(aid, parent, isRC)) {
+		while (setVisitCountBottomUp(aid.visitCount[parent], isRC)) {
 			current = parent;
 
 			left = interiors.rangeL[current];
@@ -125,8 +117,8 @@ namespace pmkd {
 		rangePtr[parent] = idx;
 
 		// choose parent in bottom-up fashion. O(n)
-		int current, left, right;
-		while (setVisitCountBottomUp(aid, parent, isRC)) {
+		int current;
+		while (setVisitCountBottomUp(aid.visitCount[parent], isRC)) {
 			current = parent;
 
 			int LR[2] = { range[0][current] ,range[1][current] };  // left, right
@@ -184,4 +176,61 @@ namespace pmkd {
 		parentSplitDim[mapped_idx] = interiors.parentSplitDim[idx];
 		parentSplitVal[mapped_idx] = interiors.parentSplitVal[idx];
 	}
+
+#ifdef ENABLE_MERKLE
+	void BuildKernel::calcLeafHash(int idx, int size, INPUT(vec3f*) pts, INPUT(int*) removeFlag, OUTPUT(hash_t*) leafHash) {
+		if (idx >= size) return;
+
+		computeDigest(leafHash + idx, pts[idx].x, pts[idx].y, pts[idx].z, removeFlag[idx] == -1);
+	}
+
+	void BuildKernel::calcInteriorHash(int idx, int leafSize, const LeavesRawRepr leaves,
+		InteriorsRawRepr interiors, OUTPUT(AtomicCount*) visitCount) {
+		if (idx >= leafSize) return;
+
+		bool isRC = idx != 0 && (idx == leafSize - 1 || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
+		int parent = interiors.mapidx[idx - isRC];
+		int current = idx;
+		const hash_t* childHash = leaves.hash + current;
+
+		// choose parent in bottom-up fashion. O(n)
+		while (setVisitCountBottomUp(visitCount[parent], isRC))
+		{
+			current = parent;
+
+			int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
+			const auto& left = LR[0];
+			const auto& right = LR[1];
+
+			// if (isRC) {  // get left child hash
+			// 	if (current < R - 1) otherChildHash = &interiors.hash[current + 1];  // left is interior
+			// 	else otherChildHash = &leaves.hash[left];                            // left is leaf
+			// }
+			// else {       // get right child hash
+			// 	if (current < R - 1) {
+			// 		int nextBin = interiors.rangeR[current + 1] + 1;
+			// 		int nextIdx = leaves.segOffset[nextBin];
+			// 		if (nextBin == leafSize - 1 || nextIdx == leaves.segOffset[nextBin + 1])
+			// 			otherChildHash = &leaves.hash[nextBin];
+			// 		else otherChildHash = &interiors.hash[nextIdx];
+			// 	}
+			// 	else {
+			// 		otherChildHash = &leaves.hash[left + 1];
+			// 	}
+			// }
+			const hash_t* otherChildHash;
+			getOtherChildHash(leaves, interiors, left, current, leafSize, isRC, otherChildHash);
+
+			computeDigest(interiors.hash + current, childHash, otherChildHash,
+				interiors.splitDim[current], interiors.splitVal[current]);
+
+			if (current == 0) break; // root
+
+			childHash = interiors.hash + current;
+
+			isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
+			parent = interiors.mapidx[LR[1 - isRC] - isRC];
+		}
+	}
+#endif
 }

@@ -28,6 +28,9 @@ add_subdirectory("${EXTERNAL_INCLUDE_DIR}/parlaylib" EXCLUDE_FROM_ALL)
 # fmtlog
 add_subdirectory("${EXTERNAL_INCLUDE_DIR}/fmtlog" EXCLUDE_FROM_ALL)
 
+# 是否编译为merkle tree
+add_compile_definitions(ENABLE_MERKLE)
+
 # PMKD所需cpp文件
 file(GLOB_RECURSE SOURCES_TREE "${CMAKE_SOURCE_DIR}/tree/*.cpp")
 # PMKD

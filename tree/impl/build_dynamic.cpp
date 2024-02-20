@@ -42,7 +42,7 @@ namespace pmkd {
 
         // choose parent in bottom-up fashion. O(n)
         int current, left, right;
-        while (setVisitCountBottomUp(aid, parent, isRC)) {
+        while (setVisitCountBottomUp(aid.visitCount[parent], isRC)) {
             current = parent;
 
             left = interiors.rangeL[current];
@@ -159,4 +159,189 @@ namespace pmkd {
         parentSplitDim[subtreeRoot] = -1;
         // parentSplitVal[subtreeRoot] = splitVal;
     }
+
+#ifdef ENABLE_MERKLE
+    void DynamicBuildKernel::calcInteriorHash_step1(int idx, int batchLeafSize, INPUT(int*) localRangeL,
+        const LeavesRawRepr leaves, InteriorsRawRepr interiors) {
+        if (idx >= batchLeafSize) return;
+        int lBound = localRangeL[idx];
+        int rBound = leaves.treeLocalRangeR[idx];
+
+        
+        bool isLeftMost = idx == lBound;
+        bool isRightMost = idx == rBound - 1;
+        bool isRC = !isLeftMost && (isRightMost || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
+
+        int parent = interiors.mapidx[idx - isRC];
+        int current = idx;
+        const hash_t* childHash = leaves.hash + current;
+
+        // choose parent in bottom-up fashion. O(n)
+        while (setVisitStateBottomUpAsVisitCount(interiors.visitState[parent], isRC)) {
+            current = parent;
+
+            int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
+            const auto& left = LR[0];
+            const auto& right = LR[1];
+
+            const hash_t* otherChildHash;
+            getOtherChildHash(leaves, interiors, left, current, rBound, isRC, otherChildHash);
+
+            computeDigest(interiors.hash + current, childHash, otherChildHash,
+                interiors.splitDim[current], interiors.splitVal[current]);
+
+            isLeftMost = left == lBound;
+            isRightMost = right == rBound - 1;
+            if (isLeftMost && isRightMost) {
+                //root
+                break;
+            }
+
+            childHash = interiors.hash + current;
+
+            isRC = !isLeftMost && (isRightMost || interiors.metrics[left - 1] <= interiors.metrics[right]);
+            parent = interiors.mapidx[LR[1 - isRC] - isRC];
+        }
+    }
+
+    void DynamicBuildKernel::calcInteriorHash_step2(int idx, int binCount, INPUT(int*) leafBinIdx, NodeMgrDevice nodeMgr) {
+        if (idx >= binCount) return;
+    
+        int mainTreeLeafSize = nodeMgr.sizesAcc[0];
+
+        int globalLeafIdx = leafBinIdx[idx];
+        int iBatch, localLeafIdx;
+        transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
+
+        const auto& _lf = nodeMgr.leavesBatch[iBatch];
+        const auto& _itr = nodeMgr.interiorsBatch[iBatch];
+        const hash_t* childHash = &_itr.hash[_lf.segOffset[localLeafIdx]];
+
+        while (true) {
+            const auto& leaves = nodeMgr.leavesBatch[iBatch];
+            auto& interiors = nodeMgr.interiorsBatch[iBatch];
+
+            int rBound = iBatch == 0 ? mainTreeLeafSize : nodeMgr.leavesBatch[iBatch].treeLocalRangeR[localLeafIdx];
+            bool isLeftMost = localLeafIdx == 0 || (interiors.mapidx[localLeafIdx - 1] == -1);
+            bool isRightMost = localLeafIdx == rBound - 1;
+
+            bool isRC = !isLeftMost && (isRightMost || interiors.metrics[localLeafIdx - 1] <= interiors.metrics[localLeafIdx]);
+            int parent = interiors.mapidx[localLeafIdx - isRC];
+
+            int current = -1;
+            // choose parent in bottom-up fashion. O(n)
+            while (setVisitStateBottomUp(interiors.visitStateTopDown, parent, interiors.visitState[parent], isRC))
+            {
+                clearVisitStateTopDown(interiors.visitStateTopDown, parent);
+                current = parent;
+
+                int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
+                const auto& left = LR[0];
+                const auto& right = LR[1];
+
+                const hash_t* otherChildHash;
+                getOtherChildHash(leaves, interiors, left, current, rBound, isRC, otherChildHash);
+
+                computeDigest(interiors.hash + current, childHash, otherChildHash,
+                    interiors.splitDim[current], interiors.splitVal[current]);
+
+                childHash = interiors.hash + current;
+
+                isLeftMost = left == 0 || (interiors.mapidx[left - 1] == -1);
+                isRightMost = right == rBound - 1;
+
+                if (isLeftMost && isRightMost) {
+                    break;
+                }
+
+                isRC = !isLeftMost && (isRightMost || interiors.metrics[left - 1] <= interiors.metrics[right]);
+                parent = interiors.mapidx[LR[1 - isRC] - isRC];
+            }
+            if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
+
+            globalLeafIdx = leaves.derivedFrom[localLeafIdx];
+            transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
+        }
+    }
+
+    void DynamicBuildKernel::calcInteriorHash_Full(int idx, int batchLeafSize, INPUT(int*) localRangeL, const LeavesRawRepr newLeaves,
+        InteriorsRawRepr newInteriors, NodeMgrDevice nodeMgr) {
+        if (idx >= batchLeafSize) return;
+
+        int mainTreeLeafSize = nodeMgr.sizesAcc[0];
+
+        const LeavesRawRepr* leaves = &newLeaves;
+        InteriorsRawRepr* interiors = &newInteriors;
+
+        int lBound = localRangeL[idx];
+        int rBound = newLeaves.treeLocalRangeR[idx];
+
+        bool isLeftMost = idx == lBound;
+        bool isRightMost = idx == rBound - 1;
+        bool isRC = !isLeftMost && (isRightMost || newInteriors.metrics[idx - 1] <= newInteriors.metrics[idx]);
+
+        int parent = newInteriors.mapidx[idx - isRC];
+
+        const hash_t* childHash = newLeaves.hash + idx;
+
+        bool isUpperLevel = false;
+        bool canMoveOn = setVisitStateBottomUpAsVisitCount(newInteriors.visitState[parent], isRC);
+        int globalLeafIdx, localLeafIdx = idx;
+        int iBatch = -1;
+
+        int current = -1;
+        while (true) {
+            // choose parent in bottom-up fashion. O(n)
+            while (canMoveOn)
+            {
+                if (isUpperLevel) clearVisitStateTopDown(interiors->visitStateTopDown, parent);
+                current = parent;
+
+                int LR[2] = { interiors->rangeL[current] ,interiors->rangeR[current] };  // left, right
+                const auto& left = LR[0];
+                const auto& right = LR[1];
+
+                const hash_t* otherChildHash;
+                getOtherChildHash(*leaves, *interiors, left, current, rBound, isRC, otherChildHash);
+
+                computeDigest(interiors->hash + current, childHash, otherChildHash,
+                    interiors->splitDim[current], interiors->splitVal[current]);
+
+                childHash = interiors->hash + current;
+
+                isLeftMost = left == 0 || (interiors->mapidx[left - 1] == -1);
+                isRightMost = right == rBound - 1;
+
+                if (isLeftMost && isRightMost) {
+                    break;
+                }
+
+                isRC = !isLeftMost && (isRightMost || interiors->metrics[left - 1] <= interiors->metrics[right]);
+                parent = interiors->mapidx[LR[1 - isRC] - isRC];
+
+                if (!isUpperLevel) canMoveOn = setVisitStateBottomUpAsVisitCount(interiors->visitState[parent], isRC);
+                else canMoveOn = setVisitStateBottomUp(interiors->visitStateTopDown, parent, interiors->visitState[parent], isRC);
+            }
+            if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
+
+            isUpperLevel = true;
+
+            globalLeafIdx = leaves->derivedFrom[localLeafIdx];
+            transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
+
+            leaves = nodeMgr.leavesBatch + iBatch;
+            interiors = nodeMgr.interiorsBatch + iBatch;
+
+            rBound = leaves->treeLocalRangeR[localLeafIdx];
+            isLeftMost = localLeafIdx == 0 || (interiors->mapidx[localLeafIdx - 1] == -1);
+            isRightMost = localLeafIdx == rBound - 1;
+
+            isRC = !isLeftMost && (isRightMost || interiors->metrics[localLeafIdx - 1] <= interiors->metrics[localLeafIdx]);
+            parent = interiors->mapidx[localLeafIdx - isRC];
+            current = -1;
+
+            canMoveOn = setVisitStateBottomUp(interiors->visitStateTopDown, parent, interiors->visitState[parent], isRC);
+        }
+    }
+#endif
 }

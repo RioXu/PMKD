@@ -1,5 +1,5 @@
 #pragma once
-#include "node.h"
+#include <node.h>
 
 namespace pmkd {
     // inline void copyState(const BottomUpState& src, TopDownStates& dst, int idx) {
@@ -24,10 +24,13 @@ namespace pmkd {
             states.child[toRC][idx] = 1;
     }
 
-    // // return if visit state is cleared after modification
-    inline bool unsetVisitStateBottomUp(TopDownStates& td, int idx, BottomUpState& bu, bool fromRC) {
-        td.child[fromRC][idx] = 0;
+    inline void clearVisitStateTopDown(TopDownStates& states, int idx) {
+        if (states.child[0][idx] > 0) states.child[0][idx] = 0;
+        if (states.child[1][idx] > 0) states.child[1][idx] = 0;
+    }
 
+    // // return if visit state is cleared after modification
+    inline bool setVisitStateBottomUp(const TopDownStates& td, int idx, BottomUpState& bu, bool fromRC) {
         // td:01, bu: 0
         uint8_t otherVisited = td.child[1 - fromRC][idx];
         if (otherVisited == 0) return true;
@@ -62,8 +65,39 @@ namespace pmkd {
     }
 
     
-    inline bool setVisitCountBottomUp(BuildAid& aid, int idx, bool fromRC) {
-        uint8_t oldCnt = aid.visitCount[idx].cnt.fetch_add(1, std::memory_order_acq_rel);
+    inline bool setVisitCountBottomUp(AtomicCount& visitCount, bool fromRC) {
+        uint8_t oldCnt = visitCount.cnt.fetch_add(1, std::memory_order_acq_rel);
+        return oldCnt  == 1;
+    }
+
+    // use bottom-up visit state as visit count
+    inline bool setVisitStateBottomUpAsVisitCount(BottomUpState& visitCount, bool fromRC) {
+        uint8_t oldCnt = visitCount.fetch_add(1, std::memory_order_acq_rel) & 1;
         return oldCnt == 1;
     }
+
+#ifdef ENABLE_MERKLE
+    inline void getOtherChildHash(const LeavesRawRepr& leaves, const InteriorsRawRepr& interiors,
+        int leafBinIdx, int interiorIdx, int rBound, bool fromRC,
+        const hash_t* &otherChildHash) {
+        
+        int R = leaves.segOffset[leafBinIdx + 1];
+
+        if (interiorIdx == R - 1) {
+            otherChildHash = leaves.hash + (leafBinIdx + 1 - fromRC);
+        }
+        else {
+            if (fromRC) {
+                otherChildHash = interiors.hash + (interiorIdx + 1);
+            }
+            else {
+                int nextBin = interiors.rangeR[interiorIdx + 1] + 1;
+                int nextIdx = leaves.segOffset[nextBin];
+                if (nextBin == rBound - 1 || nextIdx == leaves.segOffset[nextBin + 1])
+                    otherChildHash = leaves.hash + nextBin;
+                else otherChildHash = interiors.hash + nextIdx;
+            }
+        }
+    }
+#endif
 }
