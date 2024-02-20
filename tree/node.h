@@ -39,6 +39,7 @@ namespace pmkd {
 	struct LeavesRawRepr {
 		int* __restrict_arr segOffset;
 		MortonType* __restrict_arr morton;
+		int* __restrict_arr parent;
 		// for dynamic tree
 		int* __restrict_arr treeLocalRangeR;
 		int* __restrict_arr replacedBy;
@@ -53,11 +54,8 @@ namespace pmkd {
 		int* __restrict_arr rangeR;
 		int* __restrict_arr splitDim;
 		mfloat* __restrict_arr splitVal;
-		int* __restrict_arr parentSplitDim;
-		mfloat* __restrict_arr parentSplitVal;
+		int* __restrict_arr parent;
 		// for dynamic tree
-		uint8_t* __restrict_arr metrics;
-		int* __restrict_arr mapidx;
 		BottomUpState* __restrict_arr removeState;
 #ifdef ENABLE_MERKLE
 		BottomUpState* __restrict_arr visitState;
@@ -70,6 +68,7 @@ namespace pmkd {
 		//vector<int> primIdx;
 		parlay::sequence<int> segOffset;
 		vector<MortonType> morton;
+		vector<int> parent;
 		// for dynamic tree
 		vector<int> treeLocalRangeR;  // exclusive, i.e. [L, R)
 		vector<int> replacedBy; // 0: not replaced, -1: removed, positive: replaced
@@ -91,6 +90,8 @@ namespace pmkd {
 			//primIdx.reserve(capacity);
 			segOffset.reserve(capacity);
 			morton.reserve(capacity);
+			parent.reserve(capacity);
+
 			treeLocalRangeR.reserve(capacity);
 			replacedBy.reserve(capacity);
 			derivedFrom.reserve(capacity);
@@ -102,6 +103,7 @@ namespace pmkd {
 		void resizePartial(size_t size) {
 			morton.resize(size);
 			replacedBy.resize(size, 0);
+			parent.resize(size);
 #ifdef ENABLE_MERKLE
 			hash.resize(size);
 #endif
@@ -118,8 +120,9 @@ namespace pmkd {
 		Leaves copyToHost() const {
 			Leaves res;
             res.segOffset = segOffset;
-            res.morton = morton;
-            res.treeLocalRangeR = treeLocalRangeR;
+			res.morton = morton;
+			res.parent = parent;
+			res.treeLocalRangeR = treeLocalRangeR;
             res.replacedBy = replacedBy;
 			res.derivedFrom = derivedFrom;
 #ifdef ENABLE_MERKLE
@@ -132,6 +135,7 @@ namespace pmkd {
 			return LeavesRawRepr{
 				segOffset.data() + offset,
 				morton.data() + offset,
+				parent.data() + offset,
 				treeLocalRangeR.data() + offset,
 				replacedBy.data() + offset,
 				derivedFrom.data() + offset,
@@ -145,6 +149,7 @@ namespace pmkd {
 			return LeavesRawRepr{
 				const_cast<int*>(segOffset.data()) + offset,
 				const_cast<MortonType*>(morton.data()) + offset,
+				const_cast<int*>(parent.data()) + offset,
 				const_cast<int*>(treeLocalRangeR.data()) + offset,
 				const_cast<int*>(replacedBy.data()) + offset,
 				const_cast<int*>(derivedFrom.data()) + offset,
@@ -159,11 +164,8 @@ namespace pmkd {
 		vector<int> rangeL, rangeR;
 		vector<int> splitDim;
 		vector<mfloat> splitVal;
-		vector<int> parentSplitDim;
-		vector<mfloat> parentSplitVal;
+		vector<int> parent;
 		// for dynamic tree
-		vector<uint8_t> metrics;
-		vector<int> mapidx;   // original index to optimized layout index
 		// remove states
 		// 01b: lc removed, 10b: rc removed, 11b: both removed
 		vector<BottomUpState> removeState;
@@ -188,11 +190,8 @@ namespace pmkd {
 			rangeR.reserve(capacity);
 			splitDim.reserve(capacity);
 			splitVal.reserve(capacity);
-			parentSplitDim.reserve(capacity);
-			parentSplitVal.reserve(capacity);
+			parent.reserve(capacity);
 
-			metrics.reserve(capacity);
-			mapidx.reserve(capacity);
 #ifdef ENABLE_MERKLE
 			vsLeftChild.reserve(capacity);
 			vsRightChild.reserve(capacity);
@@ -205,11 +204,7 @@ namespace pmkd {
 			rangeR.resize(size);
 			splitDim.resize(size);
 			splitVal.resize(size);
-			parentSplitDim.resize(size);
-			parentSplitVal.resize(size);
-
-			metrics.resize(size);
-			mapidx.resize(size);
+			parent.resize(size);
 			
 			removeState = vector<BottomUpState>(size);
 #ifdef ENABLE_MERKLE
@@ -228,11 +223,8 @@ namespace pmkd {
             res.rangeR = rangeR;
             res.splitDim = splitDim;
             res.splitVal = splitVal;
-            res.parentSplitDim = parentSplitDim;
-			res.parentSplitVal = parentSplitVal;
+            res.parent = parent;
 
-			res.metrics = metrics;
-			res.mapidx = mapidx;
 			res.removeState = vector<BottomUpState>(removeState.size());
 			for (size_t i = 0; i < removeState.size(); ++i) {
 				res.removeState[i] = removeState[i].load(std::memory_order_relaxed);
@@ -247,8 +239,7 @@ namespace pmkd {
 			return InteriorsRawRepr{
 				rangeL.data() + offset, rangeR.data() + offset,
 				splitDim.data() + offset,splitVal.data() + offset,
-				parentSplitDim.data() + offset,parentSplitVal.data() + offset,
-				metrics.data() + offset, mapidx.data() + offset,
+				parent.data() + offset,
 				removeState.data() + offset,
 				#ifdef ENABLE_MERKLE
 				visitState.data() + offset,
@@ -262,8 +253,7 @@ namespace pmkd {
 			return InteriorsRawRepr{
 				const_cast<int*>(rangeL.data())+offset, const_cast<int*>(rangeR.data())+offset,
 				const_cast<int*>(splitDim.data())+offset,const_cast<mfloat*>(splitVal.data())+offset,
-				const_cast<int*>(parentSplitDim.data()) + offset,const_cast<mfloat*>(parentSplitVal.data()) + offset,
-				const_cast<uint8_t*>(metrics.data()) + offset, const_cast<int*>(mapidx.data()) + offset,
+				const_cast<int*>(parent.data()) + offset,
 				const_cast<BottomUpState*>(removeState.data()) + offset,
 				#ifdef ENABLE_MERKLE
 				const_cast<BottomUpState*>(visitState.data()) + offset,
@@ -361,7 +351,7 @@ namespace pmkd {
 	};
 
 	struct BuildAid {
-		//uint8_t* __restrict_arr metrics;
+		uint8_t* __restrict_arr metrics;
 		AtomicCount* visitCount;
 		int* __restrict_arr leftLeafCount;
 		int* __restrict_arr segLen;

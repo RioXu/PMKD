@@ -35,18 +35,16 @@ namespace pmkd {
 		// optimized version of buildInteriors by removing branches
 		static void buildInteriors_opt(int idx, int leafSize, const LeavesRawRepr leaves, INPUT(int*) metrics,
 			OUTPUT(int*) range[2], OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal,
-			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal,
-			BuildAid aid);
+			OUTPUT(int*) parent, BuildAid aid);
 
 		static void calcInteriorNewIdx(int idx, int size, const LeavesRawRepr leaves, const InteriorsRawRepr interiors,
 			INPUT(int*) segLen, INPUT(int*) leftLeafCount, OUTPUT(int*) mapidx);
 
 		// in place
-		static void reorderInteriors_step1(int idx, int interiorSize, const InteriorsRawRepr interiors,
-			OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
+		static void reorderInteriors(int idx, int interiorSize, INPUT(int*) mapidx, const InteriorsRawRepr interiors,
+			OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal, OUTPUT(int*) parent);
 
-		static void reorderInteriors_step2(int idx, int interiorSize, const InteriorsRawRepr interiors,
-			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
+		static void remapLeafParents(int idx, int leafSize, INPUT(int*) mapidx, LeavesRawRepr leaves);
 
 #ifdef ENABLE_MERKLE
 		static void calcLeafHash(int idx, int size, INPUT(vec3f*) pts, INPUT(int*) removeFlag, OUTPUT(hash_t*) leafHash);
@@ -72,11 +70,10 @@ namespace pmkd {
 			const LeavesRawRepr leaves, const InteriorsRawRepr interiors,
 			INPUT(int*) segLen, INPUT(int*) leftLeafCount, OUTPUT(int*) mapidx);
 
-		static void reorderInteriors_step1(int idx, int batchInteriorSize, const InteriorsRawRepr interiors,
-			OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal);
+		static void reorderInteriors(int idx, int batchInteriorSize, INPUT(int*) mapidx, const InteriorsRawRepr interiors,
+			OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal, OUTPUT(int*) parent);
 
-		static void reorderInteriors_step2(int idx, int batchInteriorSize, const InteriorsRawRepr interiors,
-			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
+		static void remapLeafParents(int idx, int batchLeafSize, INPUT(int*) mapidx, LeavesRawRepr leaves);
 
 		static void setSubtreeRootParentSplit(int idx, int numSubTree,
 			INPUT(int*) interiorCount, INPUT(int*) derivedFrom, const NodeMgrDevice nodeMgr, const AABB& gBoundary,

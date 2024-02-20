@@ -55,6 +55,17 @@ namespace pmkd {
 		// note: allocation of interiors can be async
 		interiors.resize(ptNum - 1);
 
+		auto metrics = bufferPool->acquire<uint8_t>(ptNum - 1);
+		auto mapidx = bufferPool->acquire<int>(ptNum - 1);
+		auto splitDim = bufferPool->acquire<int>(ptNum - 1);
+		auto splitVal = bufferPool->acquire<mfloat>(ptNum - 1);
+		auto parent = bufferPool->acquire<int>(ptNum - 1);
+
+		// build aid
+		auto visitCount = vector<AtomicCount>(ptNum - 1);
+		auto innerBuf = bufferPool->acquire<int>(ptNum - 1, 0);
+		auto leafBuf = bufferPool->acquire<int>(ptNum, 0);
+
 		// calculate morton code
 		parlay::parallel_for(0, ptNum,
 			[&](size_t i) { BuildKernel::calcMortonCodes(i, ptNum, pts.data(), &globalBoundary, _morton.data()); }
@@ -76,16 +87,12 @@ namespace pmkd {
 		parlay::parallel_for(0, ptNum - 1,
 			[&](size_t i) {
 				BuildKernel::calcBuildMetrics(
-					i, ptNum - 1, globalBoundary, leaves.morton.data(), interiors.metrics.data(),
+					i, ptNum - 1, globalBoundary, leaves.morton.data(), metrics.data(),
 					interiors.splitDim.data(), interiors.splitVal.data());
 			}
 		);
 
-		auto visitCount = vector<AtomicCount>(ptNum - 1);
-
-		auto innerBuf = bufferPool->acquire<int>(ptNum - 1, 0);
-		auto leafBuf = bufferPool->acquire<int>(ptNum, 0);
-		BuildAid aid{ visitCount.data(), innerBuf.data(),leafBuf.data() };
+		BuildAid aid{ metrics.data(), visitCount.data(), innerBuf.data(),leafBuf.data() };
 
 		// build interior nodes
 		// note: the following optimization does not prove better on CPU
@@ -110,6 +117,7 @@ namespace pmkd {
 				}
 			);
 			//}
+		bufferPool->release(std::move(metrics));
 
 		// calculate new indices for interiors
 		auto& segLen = leafBuf;
@@ -118,21 +126,20 @@ namespace pmkd {
 		parlay::parallel_for(0, ptNum - 1,
 			[&](size_t i) {
 				BuildKernel::calcInteriorNewIdx(
-					i, ptNum-1, leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen,aid.leftLeafCount, interiors.mapidx.data());
+					i, ptNum-1, leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen,aid.leftLeafCount, mapidx.data());
 			}
 		);
 		// reorder interiors
 		auto& rangeL = innerBuf;
 		auto& rangeR = leafBuf;
 		rangeR.resize(ptNum - 1);
-		auto splitDim = bufferPool->acquire<int>(ptNum - 1);
-		auto splitVal = bufferPool->acquire<mfloat>(ptNum - 1);
+
 		parlay::parallel_for(0, ptNum - 1,
 			[&](size_t i) {
-				BuildKernel::reorderInteriors_step1(
-					i, ptNum - 1, interiors.getRawRepr(),
+				BuildKernel::reorderInteriors(
+					i, ptNum - 1, mapidx.data(), interiors.getRawRepr(),
 					rangeL.data(), rangeR.data(),
-					splitDim.data(), splitVal.data());
+					splitDim.data(), splitVal.data(), parent.data());
 			}
 		);
 
@@ -140,26 +147,23 @@ namespace pmkd {
 		bufferPool->release<int>(std::move(interiors.rangeR));
 		bufferPool->release<int>(std::move(interiors.splitDim));
 		bufferPool->release<mfloat>(std::move(interiors.splitVal));
+		bufferPool->release<int>(std::move(interiors.parent));
 
 		interiors.rangeL = std::move(rangeL);
 		interiors.rangeR = std::move(rangeR);
 		interiors.splitDim = std::move(splitDim);
 		interiors.splitVal = std::move(splitVal);
+		interiors.parent = std::move(parent);
 
-		auto parentSplitDim = bufferPool->acquire<int>(ptNum - 1);
-		auto parentSplitVal = bufferPool->acquire<mfloat>(ptNum - 1);
 
-		parlay::parallel_for(0, ptNum - 1,
+		parlay::parallel_for(0, ptNum,
 			[&](size_t i) {
-				BuildKernel::reorderInteriors_step2(
-					i, ptNum - 1, interiors.getRawRepr(), 
-					parentSplitDim.data(), parentSplitVal.data());
+				BuildKernel::remapLeafParents(
+					i, ptNum, mapidx.data(), leaves.getRawRepr());
 			}
 		);
-		bufferPool->release<int>(std::move(interiors.parentSplitDim));
-		bufferPool->release<mfloat>(std::move(interiors.parentSplitVal));
-		interiors.parentSplitDim = std::move(parentSplitDim);
-		interiors.parentSplitVal = std::move(parentSplitVal);
+
+		bufferPool->release<int>(std::move(mapidx));
 
 		// fmt::print("add {} points:\n", ptsSorted.size());
 		// for (const auto& pt : ptsSorted) {
@@ -255,7 +259,18 @@ namespace pmkd {
 		leaves.derivedFrom.resize(batchLeafSize);
 
 		Interiors interiors;
-		interiors.resize(batchLeafSize-1);
+		interiors.resize(batchLeafSize - 1);
+
+		auto mapidx = bufferPool->acquire<int>(batchLeafSize - 1);
+		auto metrics = bufferPool->acquire<uint8_t>(batchLeafSize - 1);
+		auto splitDim = bufferPool->acquire<int>(batchLeafSize - 1);
+		auto splitVal = bufferPool->acquire<mfloat>(batchLeafSize - 1);
+		auto parent = bufferPool->acquire<int>(batchLeafSize - 1);
+
+		// build aid
+		auto visitCount = std::vector<AtomicCount>(batchLeafSize - 1);
+		auto innerBuf = bufferPool->acquire<int>(batchLeafSize - 1, 0);
+		auto leafBuf = bufferPool->acquire<int>(batchLeafSize, 0);
 
 		auto ptsAddFinal = bufferPool->acquire<vec3f>(batchLeafSize);
 		auto treeLocalRangeL = bufferPool->acquire<int>(batchLeafSize);
@@ -355,17 +370,13 @@ namespace pmkd {
 		parlay::parallel_for(0, interiorToLeafIdx.size(), [&](size_t i) {
 			DynamicBuildKernel::calcBuildMetrics(i, interiorToLeafIdx.size(), globalBoundary,
 			leaves.morton.data(), interiorToLeafIdx.data(), 
-			interiors.metrics.data(), interiors.splitDim.data(), interiors.splitVal.data());
+			metrics.data(), interiors.splitDim.data(), interiors.splitVal.data());
 		});
 
 		//---------------------------------------------------------------------
 		// build interiors
-		
-		auto visitCount = std::vector<AtomicCount>(batchLeafSize - 1);
 
-		auto innerBuf = bufferPool->acquire<int>(batchLeafSize - 1, 0);
-		auto leafBuf = bufferPool->acquire<int>(batchLeafSize, 0);
-		BuildAid aid{ visitCount.data(), innerBuf.data(),leafBuf.data() };
+		BuildAid aid{ metrics.data(), visitCount.data(), innerBuf.data(),leafBuf.data() };
 
 		// build interior nodes
 		// note: the following optimization does not prove better on CPU
@@ -391,13 +402,14 @@ namespace pmkd {
 		);
 		//}
 		bufferPool->release<int>(std::move(treeLocalRangeL));
+		bufferPool->release<uint8_t>(std::move(metrics));
 
 		// calculate new indices for interiors
 		auto& segLen = leafBuf;
 		leaves.segOffset = parlay::scan(segLen).first;
 
 		parlay::parallel_for(0, interiorCount.size() - 1, [&](size_t i) {
-			DynamicBuildKernel::interiorMapIdxInit(i, interiorCount.size(), batchLeafSize, interiorCount.data(), interiors.mapidx.data());
+			DynamicBuildKernel::interiorMapIdxInit(i, interiorCount.size(), batchLeafSize, interiorCount.data(), mapidx.data());
 		});
 		bufferPool->release<int>(std::move(interiorCount));
 
@@ -405,7 +417,7 @@ namespace pmkd {
 			[&](size_t i) {
 				DynamicBuildKernel::calcInteriorNewIdx(
 					i, interiorToLeafIdx.size(), interiorToLeafIdx.data(),
-					leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen, aid.leftLeafCount, interiors.mapidx.data());
+					leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen, aid.leftLeafCount, mapidx.data());
 			}
 		);
 		bufferPool->release<int>(std::move(interiorToLeafIdx));
@@ -414,42 +426,35 @@ namespace pmkd {
 		auto& rangeL = innerBuf;
 		auto& rangeR = leafBuf;
 		rangeR.resize(batchLeafSize - 1);
-		auto splitDim = bufferPool->acquire<int>(batchLeafSize - 1);
-		auto splitVal = bufferPool->acquire<mfloat>(batchLeafSize - 1);
 
 		parlay::parallel_for(0, batchLeafSize - 1,
 			[&](size_t i) {
-				DynamicBuildKernel::reorderInteriors_step1(
-					i, batchLeafSize - 1, interiors.getRawRepr(),
+				DynamicBuildKernel::reorderInteriors(
+					i, batchLeafSize - 1, mapidx.data(), interiors.getRawRepr(),
 					rangeL.data(), rangeR.data(),
-					splitDim.data(), splitVal.data());
+					splitDim.data(), splitVal.data(), parent.data());
 			}
 		);
 		bufferPool->release<int>(std::move(interiors.rangeL));
 		bufferPool->release<int>(std::move(interiors.rangeR));
 		bufferPool->release<int>(std::move(interiors.splitDim));
 		bufferPool->release<mfloat>(std::move(interiors.splitVal));
+		bufferPool->release<int>(std::move(interiors.parent));
 
 		interiors.rangeL = std::move(rangeL);
 		interiors.rangeR = std::move(rangeR);
 		interiors.splitDim = std::move(splitDim);
 		interiors.splitVal = std::move(splitVal);
+		interiors.parent = std::move(parent);
 
-		auto parentSplitDim = bufferPool->acquire<int>(batchLeafSize - 1);
-		auto parentSplitVal = bufferPool->acquire<mfloat>(batchLeafSize - 1);
-		parlay::parallel_for(0, batchLeafSize - 1,
+		parlay::parallel_for(0, batchLeafSize,
 			[&](size_t i) {
-				DynamicBuildKernel::reorderInteriors_step2(
-					i, batchLeafSize - 1, interiors.getRawRepr(),
-					parentSplitDim.data(), parentSplitVal.data());
+				DynamicBuildKernel::remapLeafParents(
+					i, batchLeafSize, mapidx.data(), leaves.getRawRepr());
 			}
 		);
 
-		bufferPool->release<int>(std::move(interiors.parentSplitDim));
-		bufferPool->release<mfloat>(std::move(interiors.parentSplitVal));
-
-		interiors.parentSplitDim = std::move(parentSplitDim);
-		interiors.parentSplitVal = std::move(parentSplitVal);
+		bufferPool->release<int>(std::move(mapidx));
 
 		// parlay::parallel_for(0, interiorCount.size(), [&](size_t i) {
 		// 	DynamicBuildKernel::setSubtreeRootParentSplit(i, interiorCount.size(),
@@ -547,27 +552,34 @@ namespace pmkd {
 		ptNum = leaves.size();
 
 		leaves.replacedBy.resize(ptNum, 0);
+		leaves.parent.resize(ptNum);
 #ifdef ENABLE_MERKLE
 		leaves.hash.resize(ptNum);
 #endif
 
 		interiors.resize(ptNum - 1);
+		auto metrics = bufferPool->acquire<uint8_t>(ptNum - 1);
+		auto mapidx = bufferPool->acquire<int>(ptNum - 1);
+		auto splitDim = bufferPool->acquire<int>(ptNum - 1);
+		auto splitVal = bufferPool->acquire<mfloat>(ptNum - 1);
+		auto parent = bufferPool->acquire<int>(ptNum - 1);
+
+		// build aid
+		auto visitCount = vector<AtomicCount>(ptNum - 1);
+		auto innerBuf = bufferPool->acquire<int>(ptNum - 1, 0);
+		auto leafBuf = bufferPool->acquire<int>(ptNum, 0);
 
 		// calculate metrics
 
 		parlay::parallel_for(0, ptNum - 1,
 			[&](size_t i) {
 				BuildKernel::calcBuildMetrics(
-					i, ptNum - 1, globalBoundary, leaves.morton.data(), interiors.metrics.data(),
+					i, ptNum - 1, globalBoundary, leaves.morton.data(), metrics.data(),
 					interiors.splitDim.data(), interiors.splitVal.data());
 			}
 		);
 
-		auto visitCount = vector<AtomicCount>(ptNum - 1);
-		
-		auto innerBuf = bufferPool->acquire<int>(ptNum - 1, 0);
-		auto leafBuf = bufferPool->acquire<int>(ptNum, 0);
-		BuildAid aid{ visitCount.data(), innerBuf.data(),leafBuf.data() };
+		BuildAid aid{ metrics.data(), visitCount.data(), innerBuf.data(),leafBuf.data() };
 
 		// build interior nodes
 		// note: the following optimization does not prove better on CPU
@@ -592,6 +604,7 @@ namespace pmkd {
 			}
 		);
 		//}
+		bufferPool->release<uint8_t>(std::move(metrics));
 
 		// calculate new indices for interiors
 		auto& segLen = leafBuf;
@@ -600,7 +613,7 @@ namespace pmkd {
 		parlay::parallel_for(0, ptNum - 1,
 			[&](size_t i) {
 				BuildKernel::calcInteriorNewIdx(
-					i, ptNum - 1, leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen, aid.leftLeafCount, interiors.mapidx.data());
+					i, ptNum - 1, leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen, aid.leftLeafCount, mapidx.data());
 			}
 		);
 
@@ -608,14 +621,13 @@ namespace pmkd {
 		auto& rangeL = innerBuf;
 		auto& rangeR = leafBuf;
 		rangeR.resize(ptNum - 1);
-		auto splitDim = bufferPool->acquire<int>(ptNum - 1);
-		auto splitVal = bufferPool->acquire<mfloat>(ptNum - 1);
+
 		parlay::parallel_for(0, ptNum - 1,
 			[&](size_t i) {
-				BuildKernel::reorderInteriors_step1(
-					i, ptNum - 1, interiors.getRawRepr(),
+				BuildKernel::reorderInteriors(
+					i, ptNum - 1, mapidx.data(), interiors.getRawRepr(),
 					rangeL.data(), rangeR.data(),
-					splitDim.data(), splitVal.data());
+					splitDim.data(), splitVal.data(), parent.data());
 			}
 		);
 
@@ -623,26 +635,21 @@ namespace pmkd {
 		bufferPool->release<int>(std::move(interiors.rangeR));
 		bufferPool->release<int>(std::move(interiors.splitDim));
 		bufferPool->release<mfloat>(std::move(interiors.splitVal));
+		bufferPool->release<int>(std::move(interiors.parent));
 
 		interiors.rangeL = std::move(rangeL);
 		interiors.rangeR = std::move(rangeR);
 		interiors.splitDim = std::move(splitDim);
 		interiors.splitVal = std::move(splitVal);
+		interiors.parent = std::move(parent);
 
-		auto parentSplitDim = bufferPool->acquire<int>(ptNum - 1);
-		auto parentSplitVal = bufferPool->acquire<mfloat>(ptNum - 1);
-		parlay::parallel_for(0, ptNum - 1,
+		parlay::parallel_for(0, ptNum,
 			[&](size_t i) {
-				BuildKernel::reorderInteriors_step2(
-					i, ptNum - 1, interiors.getRawRepr(),
-					parentSplitDim.data(), parentSplitVal.data());
+				BuildKernel::remapLeafParents(
+					i, ptNum, mapidx.data(), leaves.getRawRepr());
 			}
 		);
-		bufferPool->release<int>(std::move(interiors.parentSplitDim));
-		bufferPool->release<mfloat>(std::move(interiors.parentSplitVal));
-
-		interiors.parentSplitDim = std::move(parentSplitDim);
-		interiors.parentSplitVal = std::move(parentSplitVal);
+		bufferPool->release<int>(std::move(mapidx));
 	}
 	
 	PMKD_PrintInfo PMKDTree::print(bool verbose) const {

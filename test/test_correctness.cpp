@@ -5,7 +5,8 @@ using namespace pmkd;
 int main(int argc, char* argv[]) {
     int N = argc > 1 ? std::stoi(argv[1]) : 80;
     bool verbose = argc > 2 ? std::string(argv[2]) == "-v" : false;
-    
+    bool writeToFile = argc > 3 ? std::string(argv[3]) == "-w" : false;
+
     auto pts = genPts(N, false, false);
 
     fmt::print("插入测试-分批插入\n");
@@ -80,7 +81,7 @@ int main(int argc, char* argv[]) {
             if (verbose) loge("Range {} is incorrect", rangeQueries[j].toString());
         }
         // log to file
-        if (!eq) {
+        if (!eq && writeToFile) {
             fmt::print(file, "Incorrect Range {}:\n", rangeQueries[j].toString());
             fmt::print(file, "tree: ");
             for (size_t k = 0; k < *(rangeResp.size); ++k) {
@@ -146,7 +147,7 @@ int main(int argc, char* argv[]) {
 
     rangeResps_Brutal = rangeQuery_Brutal(rangeQueries, ptRemain);
 
-    fmt::print(file, "Static Insert + Remove:\n");
+    if (writeToFile) fmt::print(file, "Static Insert + Remove:\n");
     for (size_t i = 0; i < rangeResps.size(); ++i) {
         size_t j = rangeResps.queryIdx[i];
         auto rangeResp = rangeResps.at(i);
@@ -158,7 +159,7 @@ int main(int argc, char* argv[]) {
             if (verbose) loge("Range {} is incorrect", rangeQueries[j].toString());
         }
         // log to file
-        if (!eq) {
+        if (!eq && writeToFile) {
             fmt::print(file, "Incorrect Range {}:\n", rangeQueries[j].toString());
             fmt::print(file, "tree: ");
             for (size_t k = 0; k < *(rangeResp.size); ++k) {
@@ -215,7 +216,7 @@ int main(int argc, char* argv[]) {
 
     rangeResps_Brutal = rangeQuery_Brutal(rangeQueries, ptRemain);
 
-    fmt::print(file, "Dynamic Insert + Remove:\n");
+    if (writeToFile) fmt::print(file, "Dynamic Insert + Remove:\n");
     for (size_t i = 0; i < rangeResps.size(); ++i) {
         size_t j = rangeResps.queryIdx[i];
         auto rangeResp = rangeResps.at(i);
@@ -227,7 +228,7 @@ int main(int argc, char* argv[]) {
             if (verbose) loge("Range {} is incorrect", rangeQueries[j].toString());
         }
         // log to file
-        if (!eq) {
+        if (!eq && writeToFile) {
             fmt::print(file, "Incorrect Range {}:\n", rangeQueries[j].toString());
             fmt::print(file, "tree: ");
             for (size_t k = 0; k < *(rangeResp.size); ++k) {

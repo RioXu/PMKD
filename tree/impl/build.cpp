@@ -35,13 +35,12 @@ namespace pmkd {
 		if (idx >= leafSize) return;
 
 		int parent;
-		bool isRC = idx != 0 && (idx == leafSize - 1 || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
+		bool isRC = idx != 0 && (idx == leafSize - 1 || aid.metrics[idx - 1] <= aid.metrics[idx]);
 		if (!isRC) {
 			// is left child of Interior idx
 			parent = idx;
 			//leaves.parentSplitDim[idx] = interiors.splitDim[parent];
 			//leaves.parentSplitVal[idx] = interiors.splitVal[parent];
-			//leaves.parent[idx] = parent;
 			//interiors.lc[parent] = toLeafIdx(idx);
 			interiors.rangeL[parent] = idx;
 			aid.segLen[idx] = 1;
@@ -52,10 +51,10 @@ namespace pmkd {
 			parent = idx - 1;
 			//leaves.parentSplitDim[idx] = interiors.splitDim[parent];
 			//leaves.parentSplitVal[idx] = interiors.splitVal[parent];
-			//leaves.parent[idx] = parent;
 			//interiors.rc[parent] = toLeafIdx(idx);
 			interiors.rangeR[parent] = idx;
 		}
+		leaves.parent[idx] = encodeParentCode(parent, isRC);
 
 		// choose parent in bottom-up fashion. O(n)
 		int current, left, right;
@@ -67,10 +66,11 @@ namespace pmkd {
 
 			if (left == 0 && right == leafSize - 1) {
 				//root
+				interiors.parent[current] = -1;
 				break;
 			}
 
-			isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
+			isRC = left != 0 && (right == leafSize - 1 || aid.metrics[left - 1] <= aid.metrics[right]);
 			if (!isRC) {
 				// is left child of Interior right
 				parent = right;
@@ -90,23 +90,20 @@ namespace pmkd {
 				//interiors.rc[parent] = toInteriorIdx(current);
 				interiors.rangeR[parent] = right;
 			}
-			interiors.parentSplitDim[current] = interiors.splitDim[parent];
-			interiors.parentSplitVal[current] = interiors.splitVal[parent];
+			interiors.parent[current] = encodeParentCode(parent, isRC);
 		}
 	}
 
 	// optimized version of buildInteriors by removing branches
 	void BuildKernel::buildInteriors_opt(int idx, int leafSize, const LeavesRawRepr leaves, INPUT(int*) metrics,
 		OUTPUT(int*) range[2], OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal,
-		OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal,
-		BuildAid aid) {
+		OUTPUT(int*) interiorParent, BuildAid aid) {
 		
 		if (idx >= leafSize) return;
 
 		int isRC = idx != 0 && (idx == leafSize - 1 || metrics[idx - 1] <= metrics[idx]); // 1 if is right child
 		int parent = idx - isRC;
-		//leaves.parentSplitDim[idx] = interiors.splitDim[parent];
-		//leaves.parentSplitVal[idx] = interiors.splitVal[parent];
+		leaves.parent[idx] = encodeParentCode(parent, isRC);
 
 		aid.segLen[idx] = 1 - isRC;
 		aid.leftLeafCount[idx] = 1 - isRC;
@@ -127,7 +124,7 @@ namespace pmkd {
 
 			if (left == 0 && right == leafSize - 1) {
 				//root
-				parentSplitDim[current] = -1;
+				interiorParent[current] = -1;
 				break;
 			}
 			isRC = left != 0 && (right == leafSize - 1 || metrics[left - 1] <= metrics[right]); // 1 if is right child
@@ -138,8 +135,7 @@ namespace pmkd {
 				aid.leftLeafCount[parent] = aid.segLen[left]; // count the order of Interior parent
 			}
 
-			parentSplitDim[current] = splitDim[parent];
-			parentSplitVal[current] = splitVal[parent];
+			interiorParent[current] = encodeParentCode(parent, isRC);
 		}
 	}
 
@@ -154,27 +150,33 @@ namespace pmkd {
 	}
 
 	// in place
-	void BuildKernel::reorderInteriors_step1(int idx, int interiorSize, const InteriorsRawRepr interiors,
-		OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal) {
+	void BuildKernel::reorderInteriors(int idx, int interiorSize, INPUT(int*) mapidx, const InteriorsRawRepr interiors,
+		OUTPUT(int*) rangeL, OUTPUT(int*) rangeR, OUTPUT(int*) splitDim, OUTPUT(mfloat*) splitVal, OUTPUT(int*) parent) {
 
 		if (idx >= interiorSize) return;
-		int mapped_idx = interiors.mapidx[idx];
+		int mapped_idx = mapidx[idx];
 
 		rangeL[mapped_idx] = interiors.rangeL[idx];
 		rangeR[mapped_idx] = interiors.rangeR[idx];
 
 		splitDim[mapped_idx] = interiors.splitDim[idx];
 		splitVal[mapped_idx] = interiors.splitVal[idx];
+
+		int parentIdx;
+		bool isRC;
+		decodeParentCode(interiors.parent[idx], parentIdx, isRC);
+		parent[mapped_idx] = parentIdx >= 0 ? encodeParentCode(mapidx[parentIdx], isRC) : -1;
 	}
 
-	void BuildKernel::reorderInteriors_step2(int idx, int interiorSize, const InteriorsRawRepr interiors,
-		OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal) {
+	void BuildKernel::remapLeafParents(int idx, int leafSize, INPUT(int*) mapidx, LeavesRawRepr leaves) {
 
-		if (idx >= interiorSize) return;
-		int mapped_idx = interiors.mapidx[idx];
+		if (idx >= leafSize) return;
 
-		parentSplitDim[mapped_idx] = interiors.parentSplitDim[idx];
-		parentSplitVal[mapped_idx] = interiors.parentSplitVal[idx];
+		int parentIdx;
+		bool isRC;
+		decodeParentCode(leaves.parent[idx], parentIdx, isRC);
+		int mapped_idx = mapidx[parentIdx];
+		leaves.parent[idx] = encodeParentCode(mapped_idx, isRC);
 	}
 
 #ifdef ENABLE_MERKLE

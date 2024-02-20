@@ -7,7 +7,7 @@ namespace pmkd {
 	using Query = vec3f;
 	using RangeQuery = AABB;
 
-	const uint32_t DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE = 150;
+	const uint32_t DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE = 30;
 
 
 	struct QueryResponses {

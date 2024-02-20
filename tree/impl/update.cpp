@@ -169,30 +169,22 @@ namespace pmkd {
             auto& interiors = nodeMgr.interiorsBatch[iBatch];
 
             int rBound = iBatch == 0 ? mainTreeLeafSize : nodeMgr.leavesBatch[iBatch].treeLocalRangeR[localLeafIdx];
-            bool isLeftMost = localLeafIdx == 0 || (interiors.mapidx[localLeafIdx - 1] == -1);
-            bool isRightMost = localLeafIdx == rBound - 1;
 
-            bool isRC = !isLeftMost && (isRightMost || interiors.metrics[localLeafIdx - 1] <= interiors.metrics[localLeafIdx]);
-            int parent = interiors.mapidx[localLeafIdx - isRC];
+            int parent;
+            bool isRC;
+            decodeParentCode(leaves.parent[localLeafIdx], parent, isRC);
 
             // choose parent in bottom-up fashion. O(n)
-            int current = -1, left, right;
+            int current = -2, left, right;
             while (unsetRemoveStateBottomUp(interiors.removeState[parent], isRC)) {
                 current = parent;
 
-                int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
-                const auto& left = LR[0];
-                const auto& right = LR[1];
-
-                isLeftMost = left == 0 || (interiors.mapidx[left - 1] == -1);
-                isRightMost = right == rBound - 1;
-
-                if (isLeftMost && isRightMost) {
+                int parentCode = interiors.parent[current];
+                if (parentCode == -1) {
                     break;
                 }
 
-                isRC = !isLeftMost && (isRightMost || interiors.metrics[left - 1] <= interiors.metrics[right]);
-                parent = interiors.mapidx[LR[1 - isRC] - isRC];
+                decodeParentCode(parentCode, parent, isRC);
             }
             if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
 
@@ -305,8 +297,10 @@ namespace pmkd {
         if (rIdx >= rSize) return;
         int idx = binIdx[rIdx];
 
-        bool isRC = idx != 0 && (idx == leafSize - 1 || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
-        int parent = interiors.mapidx[idx - isRC];
+        bool isRC;
+        int parent;
+        decodeParentCode(leaves.parent[idx], parent, isRC);
+
         int current, left, right;
 
 #ifdef ENABLE_MERKLE
@@ -330,8 +324,7 @@ namespace pmkd {
 
             childHash = interiors.hash + current;
 
-            isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
-            parent = interiors.mapidx[LR[1 - isRC] - isRC];
+            decodeParentCode(interiors.parent[current], parent, isRC);
         }
 #else
         while (setCheckRemoveStateBottomUp(interiors.removeState[parent], isRC))
@@ -340,12 +333,7 @@ namespace pmkd {
 
             if (current == 0) break; // root
 
-            int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
-            const auto& left = LR[0];
-            const auto& right = LR[1];
-
-            isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
-            parent = interiors.mapidx[LR[1 - isRC] - isRC];
+            decodeParentCode(interiors.parent[current], parent, isRC);
         }
 #endif
     }
@@ -364,14 +352,13 @@ namespace pmkd {
             auto& interiors = nodeMgr.interiorsBatch[iBatch];
 
             int rBound = iBatch == 0 ? mainTreeLeafSize : nodeMgr.leavesBatch[iBatch].treeLocalRangeR[localLeafIdx];
-            bool isLeftMost = localLeafIdx == 0 || (interiors.mapidx[localLeafIdx - 1] == -1);
-            bool isRightMost = localLeafIdx == rBound - 1;
 
-            bool isRC = !isLeftMost && (isRightMost || interiors.metrics[localLeafIdx - 1] <= interiors.metrics[localLeafIdx]);
-            int parent = interiors.mapidx[localLeafIdx - isRC];
-            
+            bool isRC;
+            int parent;
+            decodeParentCode(leaves.parent[localLeafIdx], parent, isRC);
+
             // choose parent in bottom-up fashion. O(n)
-            int current = -1;
+            int current = -2;
 #ifdef ENABLE_MERKLE
             const hash_t* childHash = leaves.hash + localLeafIdx;
             while (setVisitStateBottomUp(interiors.visitStateTopDown, parent, interiors.visitState[parent], isRC))
@@ -396,16 +383,12 @@ namespace pmkd {
 
                 childHash = interiors.hash + current;
 #endif
-                
-                isLeftMost = left == 0 || (interiors.mapidx[left - 1] == -1);
-                isRightMost = right == rBound - 1;
+                int parentCode = interiors.parent[current];
 
-                if (isLeftMost && isRightMost) {
+                if (parentCode == -1) {
                     break;
                 }
-
-                isRC = !isLeftMost && (isRightMost || interiors.metrics[left - 1] <= interiors.metrics[right]);
-                parent = interiors.mapidx[LR[1 - isRC] - isRC];
+                decodeParentCode(parentCode, parent, isRC);
             }
             if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
 

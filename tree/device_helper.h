@@ -76,6 +76,15 @@ namespace pmkd {
         return oldCnt == 1;
     }
 
+    inline int encodeParentCode(int parentIdx, bool fromRC) {
+        return (parentIdx << 1) | (int)fromRC;
+    }
+
+    inline void decodeParentCode(int parentCode, int& parentIdx, bool& fromRC) {
+        parentIdx = parentCode >> 1;
+        fromRC = parentCode & 1;
+    }
+
 #ifdef ENABLE_MERKLE
     inline void getOtherChildHash(const LeavesRawRepr& leaves, const InteriorsRawRepr& interiors,
         int leafBinIdx, int interiorIdx, int rBound, bool fromRC,

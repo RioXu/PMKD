@@ -124,13 +124,14 @@ namespace pmkd {
 
 			// skip if box does not overlap the subtree rooted at L
 			if (L > 0 && L < R) {
-				splitDim = interiors.parentSplitDim[L];
-				if (splitDim >= 0) {
-					splitVal = interiors.parentSplitVal[L];
-					if (box.ptMax[splitDim] < splitVal) {
-						begin = interiors.rangeR[L];
-						continue;
-					}
+				int parent;
+				bool isRC;
+				decodeParentCode(interiors.parent[L], parent, isRC);
+				splitDim = interiors.splitDim[parent];
+				splitVal = interiors.splitVal[parent];
+				if (box.ptMax[splitDim] < splitVal) {
+					begin = interiors.rangeR[L];
+					continue;
 				}
 			}
 
@@ -206,14 +207,19 @@ namespace pmkd {
 
 				L = leaves.segOffset[localLeafIdx];
 				R = localLeafIdx == rBound - 1 ? L : leaves.segOffset[localLeafIdx + 1];
-				bool isLeftMost = L == 0 || interiors.mapidx[localLeafIdx - 1] == -1;
+
 				
+
 				onRight = false;
 				
-				if (!isLeftMost && L < R) {
-					splitDim = interiors.parentSplitDim[L];
-					if (splitDim >= 0) {
-						splitVal = interiors.parentSplitVal[L];
+				if (L < R) {
+					int parentCode = interiors.parent[L];
+					if (parentCode != -1) {
+						int parent;
+						bool isRC;
+						decodeParentCode(parentCode, parent, isRC);
+						splitDim = interiors.splitDim[parent];
+						splitVal = interiors.splitVal[parent];
 						if (box.ptMax[splitDim] < splitVal) {
 							localLeafIdx = interiors.rangeR[L];
 							continue;
