@@ -49,6 +49,9 @@ namespace pmkd {
 		Leaves leaves;
 		leaves.resizePartial(ptNum);  // note: can be async
 		//leaves.segOffset.resize(ptNum);
+#ifdef ENABLE_MERKLE
+		leaves.hash.resize(ptNum);
+#endif
 
 		// init interiors
 		Interiors interiors;
@@ -164,12 +167,20 @@ namespace pmkd {
 		);
 
 		bufferPool->release<int>(std::move(mapidx));
-
-		// fmt::print("add {} points:\n", ptsSorted.size());
-		// for (const auto& pt : ptsSorted) {
-		// 	fmt::printf("(%f, %f, %f) ", pt.x, pt.y, pt.z);
-		// }
-		// fmt::printf("\n");
+#ifdef ENABLE_MERKLE
+		// calc node hash
+		parlay::parallel_for(0, ptNum,
+			[&](size_t i) {
+				BuildKernel::calcLeafHash(i, ptNum, ptsSorted.data(), leaves.replacedBy.data(), leaves.hash.data());
+			}
+		);
+		parlay::parallel_for(0, ptNum,
+			[&](size_t i) {
+				BuildKernel::calcInteriorHash(i, ptNum, leaves.getRawRepr(),
+					interiors.getRawRepr(), visitCount.data());
+			}
+		);
+#endif
 		nodeMgr->append(std::move(leaves), std::move(interiors), std::move(ptsSorted));
 	}
 
@@ -246,10 +257,6 @@ namespace pmkd {
 				return getMortonCode(idx1) < getMortonCode(idx2);
 			});
 
-		// revert removal of bins to insert
-		parlay::parallel_for(0, leafIdxLeafSorted.size(), [&](size_t i) {
-			UpdateKernel::revertRemoval(i, leafIdxLeafSorted.size(), leafIdxLeafSorted.data(), nodeMgrDevice);
-		});
 
 		// allocate memory for final insertion
 		// note: can be async
@@ -257,6 +264,9 @@ namespace pmkd {
 		leaves.resizePartial(batchLeafSize);
 		leaves.treeLocalRangeR.resize(batchLeafSize);
 		leaves.derivedFrom.resize(batchLeafSize);
+#ifdef ENABLE_MERKLE
+		leaves.hash.resize(batchLeafSize);
+#endif
 
 		Interiors interiors;
 		interiors.resize(batchLeafSize - 1);
@@ -303,20 +313,20 @@ namespace pmkd {
 		bufferPool->release<int>(std::move(tempIdx));
 		bufferPool->release<int>(std::move(combinedBinIdx));
 
-		// set final points to add
-		parlay::parallel_for(0, batchLeafSize,
+		// plan 1
+		mTimer("设置pt和morton", [&] {
+			// set final points to add
+			parlay::parallel_for(0, batchLeafSize,
 			[&](size_t i) {
-				int gi = finalPrimIdx[i];
-				if (gi >= ptNum) ptsAddFinal[i] = ptsAddSorted[gi - ptNum];
-				else {
-					int iBatch, _offset;
-					transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
-					ptsAddFinal[i] = nodeMgrDevice.ptsBatch[iBatch][_offset];
+					int gi = finalPrimIdx[i];
+					if (gi >= ptNum) ptsAddFinal[i] = ptsAddSorted[gi - ptNum];
+					else {
+						int iBatch, _offset;
+						transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
+						ptsAddFinal[i] = nodeMgrDevice.ptsBatch[iBatch][_offset];
+					}
 				}
-			}
 		);
-		bufferPool->release<vec3f>(std::move(ptsAddSorted));
-
 		// set final mortons to add, set removal
 		parlay::parallel_for(0, batchLeafSize,
 			[&](size_t i) {
@@ -328,10 +338,51 @@ namespace pmkd {
 					leaves.morton[i] = nodeMgrDevice.leavesBatch[iBatch].morton[_offset];
 					// set removal
 					int r = nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset];
-					leaves.replacedBy[i] = r; 
+					leaves.replacedBy[i] = r;
 				}
 			}
 		);
+		});
+
+		// plan 2
+		// mTimer("设置pt和morton", [&] {
+		// auto finalPrimIdxNew = bufferPool->acquire<int>(sizeInc);
+		// auto finalPrimIdxOriginal = bufferPool->acquire<int>(leafIdxLeafSorted.size());
+
+		// int i1 = 0, i2 = 0;
+		// for (size_t i = 0; i < batchLeafSize; i++) {
+		// 	int gi = finalPrimIdx[i];
+		// 	if (gi >= ptNum) finalPrimIdxNew[i1++] = i;
+		// 	else finalPrimIdxOriginal[i2++] = i;
+		// }
+		// parlay::parallel_for(0, sizeInc,
+		// 	[&](size_t i) {
+		// 			int idx = finalPrimIdxNew[i];
+		// 			int gi = finalPrimIdx[idx];
+		// 			ptsAddFinal[idx] = ptsAddSorted[gi - ptNum];
+		// 			leaves.morton[idx] = mortonSorted[gi - ptNum];
+		// 		}
+		// );
+
+		// parlay::parallel_for(0, leafIdxLeafSorted.size(),
+		// 	[&](size_t i) {
+		// 		int idx = finalPrimIdxOriginal[i];
+		// 		int gi = finalPrimIdx[idx];
+
+		// 		int iBatch, _offset;
+		// 		transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
+		// 		leaves.morton[idx] = nodeMgrDevice.leavesBatch[iBatch].morton[_offset];
+		// 		ptsAddFinal[idx] = nodeMgrDevice.ptsBatch[iBatch][_offset];
+		// 		// set removal
+		// 		int r = nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset];
+		// 		leaves.replacedBy[idx] = r;
+		// 	}
+		// );
+		// bufferPool->release<int>(std::move(finalPrimIdxNew));
+		// bufferPool->release<int>(std::move(finalPrimIdxOriginal));
+		// });
+
+		bufferPool->release<vec3f>(std::move(ptsAddSorted));
 		// note: leaf hash calculation can be boost
 		// by recording leafBinIdx2finalPrimIdx and copying hash
 		// to avoid some costly hash calculation
@@ -345,14 +396,6 @@ namespace pmkd {
 		});
 		parlay::scan_inplace(interiorCount);
 
-		// set replacedBy of leafbins
-		parlay::parallel_for(0, leafIdxLeafSorted.size(), [&](size_t i) {
-			int gi = leafIdxLeafSorted[i];
-			int iBatch, _offset;
-			transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
-			
-			nodeMgrDevice.leavesBatch[iBatch].replacedBy[_offset] = ptNum + interiorCount[i] + i;
-		});
 
 		// set tree local range
 		parlay::parallel_for(0, batchLeafSize, [&](size_t i) {
@@ -411,7 +454,7 @@ namespace pmkd {
 		parlay::parallel_for(0, interiorCount.size() - 1, [&](size_t i) {
 			DynamicBuildKernel::interiorMapIdxInit(i, interiorCount.size(), batchLeafSize, interiorCount.data(), mapidx.data());
 		});
-		bufferPool->release<int>(std::move(interiorCount));
+		
 
 		parlay::parallel_for(0, interiorToLeafIdx.size(),
 			[&](size_t i) {
@@ -456,6 +499,20 @@ namespace pmkd {
 
 		bufferPool->release<int>(std::move(mapidx));
 
+		// set replacedBy of leafbins and parent of subtrees' roots
+		parlay::parallel_for(0, leafIdxLeafSorted.size(), [&](size_t i) {
+			int gi = leafIdxLeafSorted[i];
+			int iBatch, _offset;
+			transformLeafIdx(gi, nodeMgrDevice.sizesAcc, nodeMgrDevice.numBatches, iBatch, _offset);
+			auto& binLeaves = nodeMgrDevice.leavesBatch[iBatch];
+			const auto& binInteriors = nodeMgrDevice.interiorsBatch[iBatch];
+
+			binLeaves.replacedBy[_offset] = ptNum + interiorCount[i] + i;
+
+			int parentCode = ((gi - _offset) << 1) + binLeaves.parent[_offset];
+			interiors.parent[interiorCount[i]] = -parentCode;
+		});
+
 		// parlay::parallel_for(0, interiorCount.size(), [&](size_t i) {
 		// 	DynamicBuildKernel::setSubtreeRootParentSplit(i, interiorCount.size(),
 		// 	interiorCount.data(), leaves.derivedFrom.data(), nodeMgrDevice, globalBoundary,
@@ -471,6 +528,38 @@ namespace pmkd {
 		// 	fmt::printf("(%f, %f, %f) ", pt.x, pt.y, pt.z);
 		// }
 		// fmt::printf("\n");
+
+#ifdef ENABLE_MERKLE
+		// calculate node hash
+		parlay::parallel_for(0, batchLeafSize,
+			[&](size_t i) {
+				BuildKernel::calcLeafHash(i, batchLeafSize, ptsAddFinal.data(), leaves.replacedBy.data(), leaves.hash.data());
+			}
+		);
+		parlay::parallel_for(0, batchLeafSize,
+			[&](size_t i) {
+				DynamicBuildKernel::calcInteriorHash_Batch(i, batchLeafSize, 
+					leaves.getRawRepr(), interiors.getRawRepr());
+			}
+		);
+#endif
+		// revert removal of bins to insert
+		parlay::parallel_for(0, leafIdxLeafSorted.size(),
+			[&](size_t i) {
+				UpdateKernel::revertRemoval(i, leafIdxLeafSorted.size(), leafIdxLeafSorted.data(), nodeMgrDevice);
+			}
+		);
+#ifdef ENABLE_MERKLE
+		// calculate node hash
+		parlay::parallel_for(0, interiorCount.size(),
+			[&](size_t i) {
+				DynamicBuildKernel::calcInteriorHash_Upper(i, interiorCount.size(), interiorCount.data(), leafIdxLeafSorted.data(),
+					interiors.getRawRepr(), nodeMgrDevice);
+			}
+		);
+#endif
+		bufferPool->release<int>(std::move(interiorCount));
+
 		nodeMgr->append(std::move(leaves), std::move(interiors), std::move(ptsAddFinal));
 	}
 
@@ -487,6 +576,9 @@ namespace pmkd {
 		auto mortonAddSorted = bufferPool->acquire<MortonType>(sizeInc);
 		auto primIdxAdd = bufferPool->acquire<int>(sizeInc);
 		auto ptsAddSorted = bufferPool->acquire<vec3f>(sizeInc);
+#ifdef ENABLE_MERKLE
+		vector<hash_t> hashAdd(sizeInc);
+#endif
 
 		auto primIdx = bufferPool->acquire<int>(ptNum);
 
@@ -509,6 +601,9 @@ namespace pmkd {
 
 		parlay::parallel_for(0, sizeInc, [&](size_t i) { mortonAddSorted[i] = mortonAdd[primIdxAdd[i]];});
 		parlay::parallel_for(0, sizeInc, [&](size_t i) { ptsAddSorted[i] = ptsAdd[primIdxAdd[i]];});
+#ifdef ENABLE_MERKLE
+		parlay::parallel_for(0, sizeInc, [&](size_t i) { BuildKernel::calcLeafHash(i, sizeInc, ptsAddSorted.data(), hashAdd.data());});
+#endif
 		bufferPool->release<MortonType>(std::move(mortonAdd));
 
 		parlay::parallel_for(0, sizeInc,
@@ -517,7 +612,6 @@ namespace pmkd {
 		parlay::parallel_for(0, ptNum,
 			[&](size_t i) { primIdx[i] = i; }
 		);
-
 
 		auto primIdxFinal = parlay::merge(primIdx, primIdxAdd,
 			[&](int _i, int _j) {
@@ -532,8 +626,6 @@ namespace pmkd {
 		vector<vec3f> ptsSortedFinal(ptNum + sizeInc);
 		parlay::parallel_for(0, ptNum + sizeInc, [&](size_t i) {
 			int j = primIdxFinal[i];
-			int k = sizeInc;
-			int t = i;
 			ptsSortedFinal[i] = j < ptNum ? pts[j] : ptsAddSorted[j - ptNum];
 		});
 
@@ -547,6 +639,17 @@ namespace pmkd {
 		
 		bufferPool->release<MortonType>(std::move(mortonAddSorted));
 
+#ifdef ENABLE_MERKLE
+		vector<hash_t> hashFinal(ptNum + sizeInc);
+		parlay::parallel_for(0, ptNum + sizeInc, [&](size_t i) {
+			int j = primIdxFinal[i];
+			hashFinal[i] = j < ptNum ? leaves.hash[j] : hashAdd[j - ptNum];
+		});
+
+		hashAdd.clear();
+#endif
+		primIdxFinal.clear();
+
 		leaves.morton = std::move(mortonSortedFinal);
 		pts = std::move(ptsSortedFinal);
 		ptNum = leaves.size();
@@ -554,7 +657,7 @@ namespace pmkd {
 		leaves.replacedBy.resize(ptNum, 0);
 		leaves.parent.resize(ptNum);
 #ifdef ENABLE_MERKLE
-		leaves.hash.resize(ptNum);
+		leaves.hash = std::move(hashFinal);
 #endif
 
 		interiors.resize(ptNum - 1);
@@ -650,6 +753,15 @@ namespace pmkd {
 			}
 		);
 		bufferPool->release<int>(std::move(mapidx));
+
+#ifdef ENABLE_MERKLE
+		parlay::parallel_for(0, ptNum,
+			[&](size_t i) {
+				BuildKernel::calcInteriorHash(i, ptNum, leaves.getRawRepr(),
+					interiors.getRawRepr(), visitCount.data());
+			}
+		);
+#endif
 	}
 	
 	PMKD_PrintInfo PMKDTree::print(bool verbose) const {
@@ -1047,6 +1159,68 @@ namespace pmkd {
 
 		return responses;
 	}
+
+#ifdef ENABLE_MERKLE
+	hash_t PMKDTree::getRootHash() const {
+		return nodeMgr->getInteriors(0).hash[0];
+	}
+		
+	VerifiableRangeQueryResponses
+	PMKDTree::verifiableQuery(const vector<RangeQuery>& queries) const {
+		if (queries.empty()) return VerifiableRangeQueryResponses();
+
+		size_t nq = queries.size();
+		VerifiableRangeQueryResponses responses(nq);
+
+		vector<RangeQuery> queriesSorted;
+		const RangeQuery* target = queries.data();
+		// sort queries as an optimization
+		if (config.optimize) {
+			vector<vec3f> centers(nq);
+			parlay::parallel_for(0, nq,
+				[&](size_t i) { centers[i] = queries[i].center(); }
+			);
+
+			vector<MortonType> morton(nq);
+
+			parlay::parallel_for(0, nq,
+				[&](size_t i) { BuildKernel::calcMortonCodes(i, nq, centers.data(), &globalBoundary, morton.data()); }
+			);
+			// note: there are multiple sorting algorithms to choose from
+			parlay::integer_sort_inplace(
+				responses.queryIdx, [&](const auto& idx) {return morton[idx].code;});
+
+			queriesSorted.resize(nq);
+			parlay::parallel_for(0, nq, [&](size_t i) {queriesSorted[i] = queries[responses.queryIdx[i]];});
+
+			target = queriesSorted.data();
+		}
+
+		NodeMgrDevice nodeMgrDevice = nodeMgr->getDeviceHandle();
+		size_t ptNum = primSize();
+		// pass 1
+		parlay::parallel_for(0, nq, [&](size_t i) {
+			SearchKernel::searchRangesVerifiable_step1(
+				i, nq, target, nodeMgrDevice, ptNum,
+				responses.fOffset.data(), responses.mOffset.data(), responses.hOffset.data()
+			);
+		});
+		int fSize = parlay::scan_inplace(responses.fOffset);
+		int mSize = parlay::scan_inplace(responses.mOffset);
+		int hSize = parlay::scan_inplace(responses.hOffset);
+		responses.initVerificationSet(fSize, mSize, hSize);
+
+		// pass 2
+		parlay::parallel_for(0, nq, [&](size_t i) {
+			SearchKernel::searchRangesVerifiable_step2(
+				i, nq, target, nodeMgrDevice, ptNum,
+				responses.fOffset.data(), responses.mOffset.data(), responses.hOffset.data(),
+				responses.vs.fNodes.getRawRepr(), responses.vs.mNodes.getRawRepr(), responses.vs.hNodes.getRawRepr()
+			);
+		});
+		return responses;
+	}
+#endif
 
 	void PMKDTree::insert(const vector<vec3f>& ptsAdd) {
 		if (ptsAdd.empty()) return;

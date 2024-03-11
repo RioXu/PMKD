@@ -3,7 +3,7 @@
 #include <atomic>
 
 #ifdef ENABLE_MERKLE
-#include "auth/sha.h"
+#include <auth/verification_node.h>
 #endif
 #include "node.h"
 #include "query_response.h"
@@ -49,6 +49,8 @@ namespace pmkd {
 #ifdef ENABLE_MERKLE
 		static void calcLeafHash(int idx, int size, INPUT(vec3f*) pts, INPUT(int*) removeFlag, OUTPUT(hash_t*) leafHash);
 
+		static void calcLeafHash(int idx, int size, INPUT(vec3f*) pts, OUTPUT(hash_t*) leafHash);
+
 		static void calcInteriorHash(int idx, int leafSize, const LeavesRawRepr leaves,
 			InteriorsRawRepr interiors, OUTPUT(AtomicCount*) visitCount);
 #endif
@@ -80,12 +82,13 @@ namespace pmkd {
 			OUTPUT(int*) parentSplitDim, OUTPUT(mfloat*) parentSplitVal);
 
 #ifdef ENABLE_MERKLE
-		static void calcInteriorHash_step1(int idx, int batchLeafSize, INPUT(int*) localRangeL,
+		static void calcInteriorHash_Batch(int idx, int batchLeafSize,
 			const LeavesRawRepr leaves, InteriorsRawRepr interiors);
 
-		static void calcInteriorHash_step2(int idx, int binCount, INPUT(int*) leafBinIdx, NodeMgrDevice nodeMgr);
+		static void calcInteriorHash_Upper(int idx, int numSubTree, INPUT(int*) interiorCount, INPUT(int*) binIdx,
+			const InteriorsRawRepr interiors, NodeMgrDevice nodeMgr);
 
-		static void calcInteriorHash_Full(int idx, int batchLeafSize, INPUT(int*) localRangeL, const LeavesRawRepr leaves,
+		static void calcInteriorHash_Full(int idx, int batchLeafSize, const LeavesRawRepr leaves,
 			InteriorsRawRepr interiors, NodeMgrDevice nodeMgr);
 #endif
 	};
@@ -104,6 +107,15 @@ namespace pmkd {
 
 		static void searchRanges(int qIdx, int qSize, const RangeQuery* qRanges, const NodeMgrDevice nodeMgr, int totalLeafSize,
 			const AABB& boundary, RangeQueryResponsesRawRepr resps);
+
+#ifdef ENABLE_MERKLE
+		static void searchRangesVerifiable_step1(int qIdx, int qSize, const RangeQuery* qRanges, const NodeMgrDevice nodeMgr, int totalLeafSize,
+			OUTPUT(int*) fCnt, OUTPUT(int*) mCnt, OUTPUT(int*) hCnt);
+
+		static void searchRangesVerifiable_step2(int qIdx, int qSize, const RangeQuery* qRanges, const NodeMgrDevice nodeMgr, int totalLeafSize,
+			INPUT(int*) fOffset, INPUT(int*) mOffset, INPUT(int*) hOffset,
+			FNodesRawRepr fNodes, MNodesRawRepr mNodes, HNodesRawRepr hNodes);
+#endif
 	};
 
 	struct UpdateKernel {
@@ -120,7 +132,10 @@ namespace pmkd {
 			const NodeMgrDevice nodeMgr, OUTPUT(int*) binIdx);
 
 		static void revertRemoval(int qIdx, int qSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr);
-
+#ifdef ENABLE_MERKLE
+		// depricated
+		static void updateMerkleHash(int qIdx, int qSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr);
+#endif
 		// for removal
 		static void removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const vec3f* pts, int leafSize,
 			InteriorsRawRepr interiors, LeavesRawRepr leaves, OUTPUT(int*) binIdx);

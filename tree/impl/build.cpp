@@ -186,17 +186,25 @@ namespace pmkd {
 		computeDigest(leafHash + idx, pts[idx].x, pts[idx].y, pts[idx].z, removeFlag[idx] == -1);
 	}
 
+	void BuildKernel::calcLeafHash(int idx, int size, INPUT(vec3f*) pts, OUTPUT(hash_t*) leafHash) {
+		if (idx >= size) return;
+
+		computeDigest(leafHash + idx, pts[idx].x, pts[idx].y, pts[idx].z, false);
+	}
+
 	void BuildKernel::calcInteriorHash(int idx, int leafSize, const LeavesRawRepr leaves,
 		InteriorsRawRepr interiors, OUTPUT(AtomicCount*) visitCount) {
 		if (idx >= leafSize) return;
 
-		bool isRC = idx != 0 && (idx == leafSize - 1 || interiors.metrics[idx - 1] <= interiors.metrics[idx]);
-		int parent = interiors.mapidx[idx - isRC];
+		int parent;
+		bool isRC;
+		decodeParentCode(leaves.parent[idx], parent, isRC);
+
 		int current = idx;
 		const hash_t* childHash = leaves.hash + current;
 
 		// choose parent in bottom-up fashion. O(n)
-		while (setVisitCountBottomUp(visitCount[parent], isRC))
+		while (visitCount[parent].cnt.fetch_add(1, std::memory_order_acq_rel) == 3)
 		{
 			current = parent;
 
@@ -224,14 +232,13 @@ namespace pmkd {
 			getOtherChildHash(leaves, interiors, left, current, leafSize, isRC, otherChildHash);
 
 			computeDigest(interiors.hash + current, childHash, otherChildHash,
-				interiors.splitDim[current], interiors.splitVal[current]);
+				interiors.splitDim[current], interiors.splitVal[current], interiors.removeState[current]);
 
 			if (current == 0) break; // root
 
 			childHash = interiors.hash + current;
 
-			isRC = left != 0 && (right == leafSize - 1 || interiors.metrics[left - 1] <= interiors.metrics[right]);
-			parent = interiors.mapidx[LR[1 - isRC] - isRC];
+			decodeParentCode(interiors.parent[current], parent, isRC);
 		}
 	}
 #endif

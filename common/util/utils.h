@@ -60,6 +60,15 @@ namespace pmkd {
     }
 
     template<typename F, typename ...Args>
+    void mTimer(const std::string& msg, double scale, F&& func, Args&&...args) {
+        auto start = std::chrono::high_resolution_clock::now();
+        func(std::forward<Args>(args)...);
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed_time = end - start;
+        fmt::print("{}: {}ms\n", msg, elapsed_time.count() * 1000.0 * scale);
+    }
+
+    template<typename F, typename ...Args>
     void mTimerRepeated(const std::string& msg, int nIter, F&& func, Args&&...args) {
         double avgTime = 0.0;
         for (int i = 0; i < nIter;++i) {

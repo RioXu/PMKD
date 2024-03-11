@@ -22,7 +22,8 @@ int main(int argc, char* argv[]) {
     int nBatches = argc < 3 ? 3 : std::stoi(argv[2]);
 
     // test scales
-    std::vector scales{ 1e4,1e5,1e6,3e6,1e7 };
+    //std::vector scales{ 1e4,1e5,1e6,3e6,1e7 };
+    std::vector scales{ 1e4,1e5,1e6 };
 
     AABB bound(-30, -30, -30, 30, 30, 30);
     PMKD_Config config;
@@ -66,6 +67,6 @@ int main(int argc, char* argv[]) {
         mTimer("分批v2构造用时", incrementalBuild_v2, tree, ptsBatches);
         tree->destroy();
     }
-
+    delete tree;
     return 0;
 }

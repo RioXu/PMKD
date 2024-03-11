@@ -60,6 +60,13 @@ namespace pmkd {
 
 		RangeQueryResponses query(const vector<RangeQuery>& queries) const;
 
+#ifdef ENABLE_MERKLE
+		VerifiableRangeQueryResponses
+			verifiableQuery(const vector<RangeQuery>& queries) const;
+
+		hash_t getRootHash() const;
+#endif
+
 		void findBin_Experiment(const vector<vec3f>& pts, int version, bool print = false);
 
 		void insert(const vector<vec3f>& ptsAdd);
@@ -83,6 +90,10 @@ namespace pmkd {
 		void buildIncrement_v2(const vector<vec3f>& ptsAdd);
 
 		void _query(const vector<RangeQuery>& queries, RangeQueryResponses& responses) const;
+
+#ifdef ENABLE_MERKLE
+		void _verifiableQuery(const vector<RangeQuery>& queries, VerificationSet& vs) const {}
+#endif
 
 		PMKD_PrintInfo printStatic(bool verbose) const;
 

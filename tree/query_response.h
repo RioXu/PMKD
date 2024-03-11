@@ -3,11 +3,13 @@
 
 #include <common/geometry/aabb.h>
 
+#include <auth/verification_node.h>
+
 namespace pmkd {
 	using Query = vec3f;
 	using RangeQuery = AABB;
 
-	const uint32_t DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE = 30;
+	const uint32_t DEFAULT_MAX_SIZE_PER_RANGE_RESPONSE = 60;
 
 
 	struct QueryResponses {
@@ -112,5 +114,35 @@ namespace pmkd {
 				capPerResponse
 			};
 		}
+	};
+
+	struct VerifiableRangeQueryResponses {
+		vector<int> queryIdx;
+		parlay::sequence<int> fOffset;
+		parlay::sequence<int> mOffset;
+		parlay::sequence<int> hOffset;
+		VerificationSet vs;
+
+		VerifiableRangeQueryResponses() {}
+
+		VerifiableRangeQueryResponses(size_t size) :queryIdx(size), fOffset(size), mOffset(size), hOffset(size) {
+			parlay::parallel_for(0, size, [&](size_t i) {queryIdx[i] = i;});
+		}
+
+		void initVerificationSet(size_t fSize, size_t mSize, size_t hSize) {
+			vs.fNodes.resize(fSize);
+			vs.mNodes.resize(mSize);
+			vs.hNodes.resize(hSize);
+		}
+
+		VerifiableRangeQueryResponses(const VerifiableRangeQueryResponses&) = delete;
+		VerifiableRangeQueryResponses& operator=(const VerifiableRangeQueryResponses&) = delete;
+
+		VerifiableRangeQueryResponses(VerifiableRangeQueryResponses&&) = default;
+		VerifiableRangeQueryResponses& operator=(VerifiableRangeQueryResponses&&) = default;
+
+		size_t size() const { return queryIdx.size(); }
+
+		~VerifiableRangeQueryResponses() {}
 	};
 }

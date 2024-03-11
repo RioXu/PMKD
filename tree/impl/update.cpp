@@ -175,12 +175,12 @@ namespace pmkd {
             decodeParentCode(leaves.parent[localLeafIdx], parent, isRC);
 
             // choose parent in bottom-up fashion. O(n)
-            int current = -2, left, right;
+            int current = -2;
             while (unsetRemoveStateBottomUp(interiors.removeState[parent], isRC)) {
                 current = parent;
 
                 int parentCode = interiors.parent[current];
-                if (parentCode == -1) {
+                if (parentCode < 0) {
                     break;
                 }
 
@@ -191,7 +191,61 @@ namespace pmkd {
             globalLeafIdx = leaves.derivedFrom[localLeafIdx];
         }
     }
-    
+
+#ifdef ENABLE_MERKLE
+    void UpdateKernel::updateMerkleHash(int qIdx, int qSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr) {
+        if (qIdx >= qSize) return;
+
+        int globalLeafIdx = binIdx[qIdx];
+
+        int mainTreeLeafSize = nodeMgr.sizesAcc[0];
+
+        while (true) {
+            int iBatch, localLeafIdx;
+            transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
+            const auto& leaves = nodeMgr.leavesBatch[iBatch];
+            auto& interiors = nodeMgr.interiorsBatch[iBatch];
+
+            int rBound = iBatch == 0 ? mainTreeLeafSize : nodeMgr.leavesBatch[iBatch].treeLocalRangeR[localLeafIdx];
+
+            int parent;
+            bool isRC;
+            decodeParentCode(leaves.parent[localLeafIdx], parent, isRC);
+
+            // choose parent in bottom-up fashion. O(n)
+            int current = -2, left, right;
+            const hash_t* childHash = leaves.hash + localLeafIdx;
+            while (setVisitStateBottomUp(interiors.visitStateTopDown, parent, interiors.visitState[parent], isRC))
+            {
+                clearVisitStateTopDown(interiors.visitStateTopDown, parent);
+                current = parent;
+
+                int LR[2] = { interiors.rangeL[current] ,interiors.rangeR[current] };  // left, right
+                const auto& left = LR[0];
+                const auto& right = LR[1];
+
+                const hash_t* otherChildHash;
+                getOtherChildHash(leaves, interiors, left, current, rBound, isRC, otherChildHash);
+
+                computeDigest(interiors.hash + current, childHash, otherChildHash,
+                    interiors.splitDim[current], interiors.splitVal[current], interiors.removeState[current].load(std::memory_order_relaxed));
+
+                childHash = interiors.hash + current;
+
+                int parentCode = interiors.parent[current];
+
+                if (parentCode < 0) {
+                    break;
+                }
+                decodeParentCode(parentCode, parent, isRC);
+            }
+            if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
+
+            globalLeafIdx = leaves.derivedFrom[localLeafIdx];
+        }
+    }
+#endif
+
 
     void UpdateKernel::removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const vec3f* pts, int leafSize,
         InteriorsRawRepr interiors, LeavesRawRepr leaves, OUTPUT(int*) binIdx) {
@@ -224,7 +278,7 @@ namespace pmkd {
             }
             if (!onRight) {
                 // hit leaf with index <begin>
-                leaves.replacedBy[begin] = -1;  // mark as removed
+                leaves.replacedBy[begin] = -1;  // mark as removed. Note: need to recompute leaf hash
                 binIdx[rIdx] = begin;
                 break;
             }
@@ -278,7 +332,7 @@ namespace pmkd {
                 if (!onRight) {
                     int globalSubstitute = leaves.replacedBy[localLeafIdx];
                     if (globalSubstitute <= 0) { // this leaf is valid or removed (i.e. not replaced)
-                        leaves.replacedBy[localLeafIdx] = -1;  // mark as removed
+                        leaves.replacedBy[localLeafIdx] = -1;  // mark as removed. Note: need to recompute leaf hash
                         binIdx[rIdx] = globalLeafIdx;
                         return;
                     }
@@ -304,6 +358,7 @@ namespace pmkd {
         int current, left, right;
 
 #ifdef ENABLE_MERKLE
+        setRemoveStateBottomUp(interiors.removeState[parent], isRC);
         const hash_t* childHash = leaves.hash + idx;
         while (setVisitStateBottomUp(interiors.visitStateTopDown, parent, interiors.visitState[parent], isRC)) {
             clearVisitStateTopDown(interiors.visitStateTopDown, parent);
@@ -318,13 +373,16 @@ namespace pmkd {
             getOtherChildHash(leaves, interiors, left, current, leafSize, isRC, otherChildHash);
 
             computeDigest(interiors.hash + current, childHash, otherChildHash,
-                interiors.splitDim[current], interiors.splitVal[current]);
+                interiors.splitDim[current], interiors.splitVal[current], interiors.removeState[current].load(std::memory_order_relaxed));
 
             if (current == 0) break; // root
 
             childHash = interiors.hash + current;
 
             decodeParentCode(interiors.parent[current], parent, isRC);
+
+            if (isInteriorRemoved(interiors.removeState[current]))
+                setRemoveStateBottomUp(interiors.removeState[parent], isRC);
         }
 #else
         while (setCheckRemoveStateBottomUp(interiors.removeState[parent], isRC))
@@ -344,6 +402,7 @@ namespace pmkd {
         int globalLeafIdx = binIdx[rIdx];
 
         int mainTreeLeafSize = nodeMgr.sizesAcc[0];
+        bool prevRemoved = false;
 
         while (true) {
             int iBatch, localLeafIdx;
@@ -360,6 +419,8 @@ namespace pmkd {
             // choose parent in bottom-up fashion. O(n)
             int current = -2;
 #ifdef ENABLE_MERKLE
+            if (prevRemoved)
+                setRemoveStateBottomUp(interiors.removeState[parent], isRC);
             const hash_t* childHash = leaves.hash + localLeafIdx;
             while (setVisitStateBottomUp(interiors.visitStateTopDown, parent, interiors.visitState[parent], isRC))
             {
@@ -379,16 +440,21 @@ namespace pmkd {
                 getOtherChildHash(leaves, interiors, left, current, rBound, isRC, otherChildHash);
 
                 computeDigest(interiors.hash + current, childHash, otherChildHash,
-                    interiors.splitDim[current], interiors.splitVal[current]);
+                    interiors.splitDim[current], interiors.splitVal[current], interiors.removeState[current].load(std::memory_order_relaxed));
 
                 childHash = interiors.hash + current;
 #endif
                 int parentCode = interiors.parent[current];
 
-                if (parentCode == -1) {
+                if (parentCode < 0) {
                     break;
                 }
                 decodeParentCode(parentCode, parent, isRC);
+#ifdef ENABLE_MERKLE
+                prevRemoved = isInteriorRemoved(interiors.removeState[current]);
+                if (prevRemoved)
+                    setRemoveStateBottomUp(interiors.removeState[parent], isRC);
+#endif
             }
             if (current != parent || iBatch == 0) break;  // does not reach sub root, or main root visited
 

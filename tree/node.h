@@ -4,9 +4,8 @@
 #include <vector>
 
 #include <morton.h>
-#ifdef ENABLE_MERKLE
 #include <auth/sha.h>
-#endif
+
 
 namespace pmkd {
 	
@@ -25,9 +24,8 @@ namespace pmkd {
 	};
 	// using atomic_t = std::atomic<int>;
 	using atomic_t = std::atomic_uint8_t;
-#ifdef ENABLE_MERKLE
-	using hash_t = SHA192;
-#endif
+	using hash_t = sha256_t;
+
 
 	using BottomUpState = atomic_t;
 
