@@ -107,7 +107,7 @@ namespace pmkd {
 #endif
 		}
 
-		void resize(size_t size) {
+		void resizeFull(size_t size) {
 			resizePartial(size);
 
 			segOffset.resize(size);
@@ -332,9 +332,12 @@ namespace pmkd {
 
 		vector<vec3f> flattenPoints() const;
 
-		bool isDeviceSyncronized() const { return dLeavesBatch.size() == leavesBatch.size(); } // note: check when tree remove function is implemented
+		// quick judge, not accurate
+		bool isDeviceSyncronized() const { return dLeavesBatch.size() == leavesBatch.size(); }
 
-		void syncDevice();
+		void syncDevice(bool force = false);
+
+		void refitBatch(size_t batchIdx);
 
 		NodeMgrDevice getDeviceHandle() const;
 

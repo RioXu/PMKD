@@ -134,7 +134,7 @@ namespace pmkd {
 		static void revertRemoval(int qIdx, int qSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr);
 #ifdef ENABLE_MERKLE
 		// depricated
-		static void updateMerkleHash(int qIdx, int qSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr);
+		static void updateMerkleHash(int mIdx, int mSize, INPUT(int*) mixOpBinIdx, NodeMgrDevice nodeMgr);
 #endif
 		// for removal
 		static void removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const vec3f* pts, int leafSize,
@@ -143,11 +143,19 @@ namespace pmkd {
 		static void removePoints_step1(int rIdx, int rSize, const vec3f* rPts, const NodeMgrDevice nodeMgr,
 			int totalLeafSize, OUTPUT(int*) binIdx);
 
+#ifdef ENABLE_MERKLE
+		static void calcSelectedLeafHash(int rIdx, int rSize, INPUT(int*) binIdx,
+			NodeMgrDevice nodeMgr);
+#endif
+
 		static void removePoints_step2(int rIdx, int rSize, int leafSize, INPUT(int*) binIdx, const LeavesRawRepr leaves,
 			InteriorsRawRepr interiors);
 		
-		static void removePoints_step2(int rIdx, int rSize, INPUT(int*) binIdx,
-			NodeMgrDevice nodeMgr);
+		static void removePoints_step2(int rIdx, int rSize, INPUT(int*) binIdx,	NodeMgrDevice nodeMgr);
+
+		// removal v2
+		static void removePoints_v2_step1(int rIdx, int rSize, const vec3f* rPts, const vec3f* pts, int leafSize,
+			InteriorsRawRepr interiors, LeavesRawRepr leaves);
 	};
 
 	struct VerifyKernel {

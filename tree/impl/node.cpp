@@ -3,7 +3,7 @@
 
 namespace pmkd {
     void NodeMgr::append(Leaves&& leaves, Interiors&& interiors, vector<vec3f>&& pts, bool syncDevice) {
-        if (interiors.rangeL.empty()) return;
+        if (interiors.size() == 0) return;
 
         size_t nb = numBatches();
         int acc = leaves.size() + (nb > 0 ? sizesAcc[nb - 1] : 0);
@@ -19,6 +19,22 @@ namespace pmkd {
         leavesBatch.emplace_back(std::move(leaves));
         interiorsBatch.emplace_back(std::move(interiors));
         ptsBatch.emplace_back(std::move(pts));
+    }
+
+    void NodeMgr::refitBatch(size_t batchIdx) {
+        const auto& leaves = leavesBatch[batchIdx];
+        const auto& interiors = interiorsBatch[batchIdx];
+        auto& pts = ptsBatch[batchIdx];
+
+        int deltaSize = leaves.size() -
+            (sizesAcc[batchIdx] - (batchIdx > 0 ? sizesAcc[batchIdx - 1] : 0));
+        for (size_t i = batchIdx;i < numBatches(); i++) {
+            sizesAcc[i] += deltaSize;
+        }
+        dSizesAcc = sizesAcc;
+        dLeavesBatch[batchIdx] = leaves.getRawRepr();
+        dInteriorsBatch[batchIdx] = interiors.getRawRepr();
+        dPtsBatch[batchIdx] = pts.data();
     }
 
     NodeMgr::HostCopy NodeMgr::copyToHost() const {
@@ -51,8 +67,8 @@ namespace pmkd {
         return pts;
     }
 
-    void NodeMgr::syncDevice() {
-        if (isDeviceSyncronized()) return;
+    void NodeMgr::syncDevice(bool force) {
+        if (!force && isDeviceSyncronized()) return;
         if (numBatches() == 0) {
             clearDevice();
             return;

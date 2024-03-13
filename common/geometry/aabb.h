@@ -55,6 +55,10 @@ namespace pmkd {
 			ptMax = vec3f(-FMAX, -FMAX, -FMAX);
 		}
 
+		static inline AABB worldBox() {
+			return AABB(vec3f(-FMAX, -FMAX, -FMAX), vec3f(FMAX, FMAX, FMAX));
+		}
+
 		std::string toString() const {
 			char content[50];
 #if USE_DOUBLE_PRECISION

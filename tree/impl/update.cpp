@@ -193,10 +193,10 @@ namespace pmkd {
     }
 
 #ifdef ENABLE_MERKLE
-    void UpdateKernel::updateMerkleHash(int qIdx, int qSize, INPUT(int*) binIdx, NodeMgrDevice nodeMgr) {
-        if (qIdx >= qSize) return;
+    void UpdateKernel::updateMerkleHash(int mIdx, int mSize, INPUT(int*) mixOpBinIdx, NodeMgrDevice nodeMgr) {
+        if (mIdx >= mSize) return;
 
-        int globalLeafIdx = binIdx[qIdx];
+        int globalLeafIdx = mixOpBinIdx[mIdx];
 
         int mainTreeLeafSize = nodeMgr.sizesAcc[0];
 
@@ -461,4 +461,54 @@ namespace pmkd {
             globalLeafIdx = leaves.derivedFrom[localLeafIdx];
         }
     }
+
+    // removal v2
+    void UpdateKernel::removePoints_v2_step1(int rIdx, int rSize, const vec3f* rPts, const vec3f* pts, int leafSize,
+        InteriorsRawRepr interiors, LeavesRawRepr leaves) {
+        if (rIdx >= rSize) return;
+        const vec3f& pt = rPts[rIdx];
+
+        // do sprouting
+        int L = 0, R = 0;
+        bool onRight;
+        int interiorIdx = 0;
+        for (int begin = 0; begin < leafSize; begin++) {
+            L = leaves.segOffset[begin];
+            R = begin == leafSize - 1 ? L : leaves.segOffset[begin + 1];
+            onRight = false;
+            for (interiorIdx = L; interiorIdx < R; interiorIdx++) {
+                int splitDim = interiors.splitDim[interiorIdx];
+                mfloat splitVal = interiors.splitVal[interiorIdx];
+                onRight = pt[splitDim] >= splitVal;
+
+
+                if (onRight) {
+                    // goto right child
+                    begin = interiorIdx < R - 1 ? interiors.rangeR[interiorIdx + 1] : begin;
+                    break;
+                }
+            }
+            if (!onRight) {
+                // hit leaf with index <begin>
+                leaves.replacedBy[begin] = -1;
+                break;
+            }
+        }
+    }
+#ifdef ENABLE_MERKLE
+    void UpdateKernel::calcSelectedLeafHash(int rIdx, int rSize, INPUT(int*) binIdx,
+        NodeMgrDevice nodeMgr) {
+        
+        if (rIdx >= rSize) return;
+        int globalLeafIdx = binIdx[rIdx];
+
+        int iBatch, localLeafIdx;
+        transformLeafIdx(globalLeafIdx, nodeMgr.sizesAcc, nodeMgr.numBatches, iBatch, localLeafIdx);
+        auto& leaves = nodeMgr.leavesBatch[iBatch];
+        const auto& pts = nodeMgr.ptsBatch[iBatch];
+
+        computeDigest(leaves.hash + localLeafIdx,
+            pts[localLeafIdx].x, pts[localLeafIdx].y, pts[localLeafIdx].z, leaves.replacedBy[localLeafIdx] == -1);
+    }
+#endif
 }

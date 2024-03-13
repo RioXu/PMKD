@@ -24,7 +24,7 @@ namespace pmkd {
 #else
 	private:
 #endif
-		AABB sceneBoundary;
+		//AABB sceneBoundary;
 		AABB globalBoundary;
 
 		std::unique_ptr<NodeMgr> nodeMgr;
@@ -77,23 +77,27 @@ namespace pmkd {
 
 		void remove(const vector<vec3f>& ptsRemove);
 
+		void remove_v2(const vector<vec3f>& ptsRemove);
+
 		// mixed operations
-		void execute() {}
+		void execute(const vector<vec3f>& ptsRemove, const vector<vec3f>& ptsAdd);
 
 	private:
 		void init();
 
+		void sortPts(const vector<vec3f>& pts, vector<vec3f>& ptsSorted) const;
+		void sortPts(const vector<vec3f>& pts, vector<vec3f>& ptsSorted, vector<int>& primIdxInited) const;
+		void sortPts(const vector<vec3f>& pts, vector<vec3f>& ptsSorted, vector<int>& primIdx, vector<MortonType>& mortons) const;
+
 		void buildStatic(const vector<vec3f>& pts);
+
+		void buildStatic_LeavesReady(Leaves& leaves, Interiors& interiors);
 
 		void buildIncrement(const vector<vec3f>& ptsAdd);
 
 		void buildIncrement_v2(const vector<vec3f>& ptsAdd);
 
 		void _query(const vector<RangeQuery>& queries, RangeQueryResponses& responses) const;
-
-#ifdef ENABLE_MERKLE
-		void _verifiableQuery(const vector<RangeQuery>& queries, VerificationSet& vs) const {}
-#endif
 
 		PMKD_PrintInfo printStatic(bool verbose) const;
 

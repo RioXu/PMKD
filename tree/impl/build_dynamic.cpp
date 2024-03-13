@@ -206,13 +206,13 @@ namespace pmkd {
     }
 
     void DynamicBuildKernel::calcInteriorHash_Upper(int idx, int numSubTree, INPUT(int*) interiorCount, INPUT(int*) binIdx,
-        const InteriorsRawRepr interiors, NodeMgrDevice nodeMgr) {
+        const InteriorsRawRepr interiorsInsert, NodeMgrDevice nodeMgr) {
         if (idx >= numSubTree) return;
 
         int interiorIdx = interiorCount[idx];
         int mainTreeLeafSize = nodeMgr.sizesAcc[0];
 
-        const hash_t* childHash = &interiors.hash[interiorIdx];
+        const hash_t* childHash = &interiorsInsert.hash[interiorIdx];
 
         int globalLeafIdx = binIdx[idx];
         int iBatch, localLeafIdx;

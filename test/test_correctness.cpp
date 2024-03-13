@@ -7,23 +7,28 @@ int main(int argc, char* argv[]) {
     bool verbose = argc > 2 ? std::string(argv[2]) == "-v" : false;
     bool writeToFile = argc > 3 ? std::string(argv[3]) == "-w" : false;
 
-    auto pts = genPts(N, false, false);
 
-    fmt::print("插入测试-分批插入\n");
-    PMKDTree* tree = nullptr;
-    auto init = [&]() {
-        if (tree) delete tree;
-        tree = new PMKDTree();
-        tree->firstInsert(pts);
-    };
+    AABB bound(-30, -30, -30, 30, 30, 30);
+    PMKD_Config config;
+    config.globalBoundary = bound;
+
+    auto pts = genPts(N, false, false, bound);
+    auto ptsAdd1 = genPts(N / 5, false, false, bound);
+    auto ptsAdd2 = genPts(N / 5, false, false, bound);
+
+    PMKDTree* tree = new PMKDTree(config);
+
     auto remove = [&](auto&& _ptsRemove) {
         tree->remove(_ptsRemove);
     };
-    
-    init();
-    auto ptsAdd1 = genPts(N / 5, false, false, tree->getGlobalBoundary());
-    auto ptsAdd2 = genPts(N / 5, false, false, tree->getGlobalBoundary());
 
+    vector<vec3f> ptQueries;
+    ptQueries.insert(ptQueries.end(), pts.begin() + pts.size() / 2, pts.end());
+    ptQueries.insert(ptQueries.end(), ptsAdd1.begin() + ptsAdd1.size() / 2, ptsAdd1.end());
+    ptQueries.insert(ptQueries.end(), ptsAdd2.begin() + ptsAdd2.size() / 2, ptsAdd2.end());
+
+    fmt::print("插入测试-分批插入\n");
+    tree->firstInsert(pts);
     tree->insert(ptsAdd1);
     tree->insert(ptsAdd2);
 
@@ -38,11 +43,6 @@ int main(int argc, char* argv[]) {
     }
     // 点查询
     fmt::print("Point Search:\n");
-
-    vector<vec3f> ptQueries;
-    ptQueries.insert(ptQueries.end(), pts.begin() + pts.size() / 2, pts.end());
-    ptQueries.insert(ptQueries.end(), ptsAdd1.begin() + ptsAdd1.size() / 2, ptsAdd1.end());
-    ptQueries.insert(ptQueries.end(), ptsAdd2.begin() + ptsAdd2.size() / 2, ptsAdd2.end());
 
     int nErr = 0;
     auto ptResp = tree->query(ptQueries);
@@ -99,6 +99,25 @@ int main(int argc, char* argv[]) {
     }
     fmtlog::poll();
     fmt::print("{}/{} Failures\n\n", nErr, rangeQueries.size());
+
+    fmt::print("插入测试-插入v2\n");
+    tree->firstInsert(pts);
+    tree->insert_v2(ptsAdd1);
+    tree->insert_v2(ptsAdd2);
+
+    // 点查询
+    fmt::print("Point Search:\n");
+    nErr = 0;
+    ptResp = tree->query(ptQueries);
+    for (size_t i = 0; i < ptResp.size(); ++i) {
+        if (!ptResp.exist[i]) {
+            size_t j = ptResp.queryIdx[i];
+            if (verbose) loge("({:.3f}, {:.3f}, {:.3f}) not found", ptQueries[j].x, ptQueries[j].y, ptQueries[j].z);
+            ++nErr;
+        }
+    }
+    fmtlog::poll();
+    fmt::print("{}/{} Failures\n\n", nErr, ptResp.size());
 
     // 删除测试
     vector<vec3f> ptRemove;
@@ -176,6 +195,91 @@ int main(int argc, char* argv[]) {
     }
     fmtlog::poll();
     fmt::print("{}/{} Failures\n\n", nErr, rangeQueries.size());
+
+    fmt::print("删除测试-静态v2\n");
+    // static
+    tree->destroy();
+    tree->firstInsert(allPts);
+    tree->remove_v2(ptRemove);
+
+    // fmt::print("tree pts:\n");
+    // const auto& _m_pts = tree->nodeMgr->getPtsBatch(0);
+    // for (size_t i = 0; i < _m_pts.size(); ++i) {
+    //     fmt::print("({:.3f}, {:.3f}, {:.3f}), ", _m_pts[i].x, _m_pts[i].y, _m_pts[i].z);
+    // }
+    // fmt::print("\n");
+
+    // tree->destroy();
+    // tree->firstInsert(ptRemain);
+    // fmt::print("ptRemain:\n");
+    // const auto& _r_pts = tree->nodeMgr->getPtsBatch(0);
+    // for (size_t i = 0; i < _r_pts.size(); ++i) {
+    //     fmt::print("({:.3f}, {:.3f}, {:.3f}), ", _r_pts[i].x, _r_pts[i].y, _r_pts[i].z);
+    // }
+    // fmt::print("\n");
+
+    // 点测试
+    {
+        fmt::print("Point Search:\n");
+        nErr = 0;
+        ptResp = tree->query(ptRemove);
+        for (size_t i = 0; i < ptResp.size(); ++i) {
+            if (ptResp.exist[i]) {
+                size_t j = ptResp.queryIdx[i];
+                if (verbose) loge("({:.3f}, {:.3f}, {:.3f}) removed but found", ptRemove[j].x, ptRemove[j].y, ptRemove[j].z);
+                ++nErr;
+            }
+        }
+        ptResp = tree->query(ptRemain);
+        for (size_t i = 0; i < ptResp.size(); ++i) {
+            if (!ptResp.exist[i]) {
+                size_t j = ptResp.queryIdx[i];
+                if (verbose) loge("{}: ({:.3f}, {:.3f}, {:.3f}) not found", i, ptRemain[j].x, ptRemain[j].y, ptRemain[j].z);
+                ++nErr;
+            }
+        }
+        fmtlog::poll();
+        fmt::print("{}/{} Failures\n\n", nErr, ptRemove.size() + ptRemain.size());
+    }
+
+    // 范围测试
+    {
+        fmt::print("Range Search:\n");
+        nErr = 0;
+        rangeResps = tree->query(rangeQueries);
+
+        rangeResps_Brutal = rangeQuery_Brutal(rangeQueries, ptRemain);
+
+        if (writeToFile) fmt::print(file, "Static Insert + Remove:\n");
+        for (size_t i = 0; i < rangeResps.size(); ++i) {
+            size_t j = rangeResps.queryIdx[i];
+            auto rangeResp = rangeResps.at(i);
+            auto rangeResp_Brutal = rangeResps_Brutal.at(j);
+
+            bool eq = isContentEqual(rangeResp, rangeResp_Brutal);
+            if (!eq) {
+                ++nErr;
+                if (verbose) loge("Range {} is incorrect", rangeQueries[j].toString());
+            }
+            // log to file
+            if (!eq && writeToFile) {
+                fmt::print(file, "Incorrect Range {}:\n", rangeQueries[j].toString());
+                fmt::print(file, "tree: ");
+                for (size_t k = 0; k < *(rangeResp.size); ++k) {
+                    fmt::print(file, "({:.3f}, {:.3f}, {:.3f}) ",
+                        rangeResp.pts[k].x, rangeResp.pts[k].y, rangeResp.pts[k].z);
+                }
+                fmt::print(file, "\nbrutal: ");
+                for (size_t k = 0; k < *(rangeResp_Brutal.size); ++k) {
+                    fmt::print(file, "({:.3f}, {:.3f}, {:.3f}) ",
+                        rangeResp_Brutal.pts[k].x, rangeResp_Brutal.pts[k].y, rangeResp_Brutal.pts[k].z);
+                }
+                fmt::print(file, "\n\n");
+            }
+        }
+        fmtlog::poll();
+        fmt::print("{}/{} Failures\n\n", nErr, rangeQueries.size());
+    }
 
     fmt::print("删除测试-动态树\n");
     // dynamic
@@ -258,6 +362,36 @@ int main(int argc, char* argv[]) {
     tree->firstInsert(pts);
     mTimer("删除用时", remove, ptRemove2);
     tree->insert(ptsAdd1);
+    tree->insert(ptsAdd2);
+
+    // 点测试
+    fmt::print("Point Search:\n");
+    nErr = 0;
+    ptResp = tree->query(ptRemove2);
+    for (size_t i = 0; i < ptResp.size(); ++i) {
+        if (ptResp.exist[i]) {
+            size_t j = ptResp.queryIdx[i];
+            if (verbose) loge("({:.3f}, {:.3f}, {:.3f}) removed but found", ptRemove2[j].x, ptRemove2[j].y, ptRemove2[j].z);
+            ++nErr;
+        }
+    }
+    ptResp = tree->query(ptRemain2);
+    for (size_t i = 0; i < ptResp.size(); ++i) {
+        if (!ptResp.exist[i]) {
+            size_t j = ptResp.queryIdx[i];
+            if (verbose) loge("i: {}, ({:.3f}, {:.3f}, {:.3f}) not found", i, ptRemain2[j].x, ptRemain2[j].y, ptRemain2[j].z);
+            ++nErr;
+        }
+    }
+    fmtlog::poll();
+    fmt::print("{}/{} Failures\n\n", nErr, ptRemove2.size() + ptRemain2.size());
+
+    fmt::print("混合测试-插入+混合+插入\n");
+    // dynamic
+    tree->destroy();
+
+    tree->firstInsert(pts);
+    tree->execute(ptRemove2, ptsAdd1);
     tree->insert(ptsAdd2);
 
     // 点测试

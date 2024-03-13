@@ -62,13 +62,29 @@ int main(int argc, char* argv[]) {
 
     // 范围测试
     fmt::print(" Verifiable Range Search:\n");
-    auto rangeQueries = genRanges(tree->primSize() / 3, false, false);
-    auto veriResps = tree->verifiableQuery(rangeQueries);
+    auto rangeQueries = genRanges(std::min(1000lu, tree->primSize() / 3), false, false);
+    VerifiableRangeQueryResponses veriResps;
+    mTimer("平均查询用时", 1.0 / rangeQueries.size(), [&] {
+        veriResps = tree->verifiableQuery(rangeQueries);
+    });
 
     int nErr = 0;
     parlay::parlay_unordered_map<int, size_t> table(0.25*N);
     hash_t rootHash = tree->getRootHash();
-    mTimer("平均验证用时", 1.0 / veriResps.size(), [&] {
+    mTimer("平均验证用时-单核", 1.0 / veriResps.size(), [&] {
+        for (size_t i = 0; i < veriResps.size(); ++i) {
+            size_t j = veriResps.queryIdx[i];
+            bool correct = verifyRangeQuery_Sequential(rootHash, rangeQueries[j], veriResps, i, table);
+            nErr += 1 - correct;
+            if (!correct && verbose) {
+                fmt::print("Incorrect Range {}:\n", rangeQueries[j].toString());
+            }
+        }
+    });
+    fmt::print("{}/{} Failures\n", nErr, veriResps.size());
+
+    nErr = 0;
+    mTimer("平均验证用时-并行", 1.0 / veriResps.size(), [&] {
         for (size_t i = 0; i < veriResps.size(); ++i) {
             size_t j = veriResps.queryIdx[i];
             bool correct = verifyRangeQuery(rootHash, rangeQueries[j], veriResps, i, table);

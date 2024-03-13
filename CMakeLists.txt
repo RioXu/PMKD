@@ -11,7 +11,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx")
 set(EXTERNAL_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/external")
 set(PARLAYHASH_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/external/include/parlayhash")
 # 设置parlay并行线程数
-set(PARLAY_NUM_THREADS 16)
+set(PARLAY_NUM_THREADS 32)
 
 # 项目内除第三方库以外的所有cpp文件
 #file(GLOB_RECURSE SOURCES_THIS "${CMAKE_SOURCE_DIR}/*.cpp")
@@ -74,6 +74,9 @@ target_link_libraries(test_insert PRIVATE pmkd)
 
 add_executable (test_verify "test/test_verify.cpp")
 target_link_libraries(test_verify PRIVATE pmkd)
+
+add_executable (test_any "test/test_any.cpp")
+target_link_libraries(test_any PRIVATE pmkd)
 
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)

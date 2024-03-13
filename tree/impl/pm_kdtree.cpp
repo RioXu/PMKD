@@ -32,31 +32,112 @@ namespace pmkd {
 		// release stored points
 		// release leaves and interiors
 		nodeMgr->clear();
+		//sceneBoundary.reset();
+		globalBoundary = config.globalBoundary;
+		isStatic = false;
+	}
+
+	void PMKDTree::sortPts(const vector<vec3f>& pts, vector<vec3f>& ptsSorted) const {
+		size_t nPts = pts.size();
+
+		auto primIdx = bufferPool->acquire<int>(nPts);
+		auto morton = bufferPool->acquire<MortonType>(nPts);
+
+		parlay::parallel_for(0, nPts,
+			[&](size_t i) { primIdx[i] = i; }
+		);
+
+		parlay::parallel_for(0, nPts,
+			[&](size_t i) { BuildKernel::calcMortonCodes(i, nPts, pts.data(), &globalBoundary, morton.data()); }
+		);
+		// note: there are multiple sorting algorithms to choose from
+		parlay::integer_sort_inplace(
+			primIdx, [&](const auto& idx) {return morton[idx].code;});
+
+		parlay::parallel_for(0, nPts, [&](size_t i) {ptsSorted[i] = pts[primIdx[i]]; });
+
+		bufferPool->release(std::move(primIdx));
+		bufferPool->release(std::move(morton));
+	}
+
+	void PMKDTree::sortPts(const vector<vec3f>& pts, vector<vec3f>& ptsSorted, vector<int>& primIdxInited) const {
+		size_t nPts = pts.size();
+
+		auto morton = bufferPool->acquire<MortonType>(nPts);
+
+		parlay::parallel_for(0, nPts,
+			[&](size_t i) { BuildKernel::calcMortonCodes(i, nPts, pts.data(), &globalBoundary, morton.data()); }
+		);
+		// note: there are multiple sorting algorithms to choose from
+		parlay::integer_sort_inplace(
+			primIdxInited, [&](const auto& idx) {return morton[idx].code;});
+
+		parlay::parallel_for(0, nPts, [&](size_t i) {ptsSorted[i] = pts[primIdxInited[i]]; });
+
+		bufferPool->release(std::move(morton));
+	}
+
+	void PMKDTree::sortPts(const vector<vec3f>& pts, vector<vec3f>& ptsSorted, vector<int>& primIdx, vector<MortonType>& morton) const {
+		size_t nPts = pts.size();
+
+		parlay::parallel_for(0, nPts,
+			[&](size_t i) { primIdx[i] = i; }
+		);
+
+		parlay::parallel_for(0, nPts,
+			[&](size_t i) { BuildKernel::calcMortonCodes(i, nPts, pts.data(), &globalBoundary, morton.data()); }
+		);
+		// note: there are multiple sorting algorithms to choose from
+		parlay::integer_sort_inplace(
+			primIdx, [&](const auto& idx) {return morton[idx].code;});
+
+		parlay::parallel_for(0, nPts, [&](size_t i) {ptsSorted[i] = pts[primIdx[i]]; });
 	}
 
 	void PMKDTree::buildStatic(const vector<vec3f>& pts) {
 		size_t ptNum = pts.size();
 
-		// get scene boundary
-		sceneBoundary = reduce<AABB>(pts, MergeOp());
-		globalBoundary.merge(sceneBoundary);
-
-		auto primIdx = bufferPool->acquire<int>(ptNum);
-		parlay::parallel_for(0, ptNum, [&](size_t i) {primIdx[i] = i;});
-		auto _morton = bufferPool->acquire<MortonType>(ptNum);
-
+		// note: can be async
+		vector<vec3f> ptsSorted(ptNum);
 		// init leaves
 		Leaves leaves;
 		leaves.resizePartial(ptNum);  // note: can be async
 		//leaves.segOffset.resize(ptNum);
-#ifdef ENABLE_MERKLE
-		leaves.hash.resize(ptNum);
-#endif
 
 		// init interiors
 		Interiors interiors;
 		// note: allocation of interiors can be async
 		interiors.resize(ptNum - 1);
+
+		// get scene boundary
+		//sceneBoundary = reduce<AABB>(pts, MergeOp());
+		//globalBoundary.merge(sceneBoundary);
+
+		auto primIdx = bufferPool->acquire<int>(ptNum);
+		auto _morton = bufferPool->acquire<MortonType>(ptNum);
+
+		sortPts(pts, ptsSorted, primIdx, _morton);
+		parlay::parallel_for(0, ptNum, [&](size_t i) {leaves.morton[i] = _morton[primIdx[i]];});
+
+		bufferPool->release(std::move(primIdx));
+		bufferPool->release(std::move(_morton));
+
+#ifdef ENABLE_MERKLE
+		// calc leaf hash
+		parlay::parallel_for(0, ptNum,
+			[&](size_t i) {
+				BuildKernel::calcLeafHash(i, ptNum, ptsSorted.data(), leaves.replacedBy.data(), leaves.hash.data());
+			}
+		);
+#endif
+
+		buildStatic_LeavesReady(leaves, interiors);
+		nodeMgr->append(std::move(leaves), std::move(interiors), std::move(ptsSorted));
+	}
+
+	void PMKDTree::buildStatic_LeavesReady(Leaves& leaves, Interiors& interiors) {
+		size_t ptNum = leaves.size();
+
 
 		auto metrics = bufferPool->acquire<uint8_t>(ptNum - 1);
 		auto mapidx = bufferPool->acquire<int>(ptNum - 1);
@@ -69,24 +150,7 @@ namespace pmkd {
 		auto innerBuf = bufferPool->acquire<int>(ptNum - 1, 0);
 		auto leafBuf = bufferPool->acquire<int>(ptNum, 0);
 
-		// calculate morton code
-		parlay::parallel_for(0, ptNum,
-			[&](size_t i) { BuildKernel::calcMortonCodes(i, ptNum, pts.data(), &globalBoundary, _morton.data()); }
-		);
-
-		// reorder leaves using morton code
-		// note: there are multiple sorting algorithms to choose from
-		parlay::integer_sort_inplace(primIdx, [&](const auto& idx) {return _morton[idx].code;});
-		parlay::parallel_for(0, ptNum, [&](size_t i) {leaves.morton[i] = _morton[primIdx[i]];});
-
-		vector<vec3f> ptsSorted(ptNum);
-		parlay::parallel_for(0, ptNum, [&](size_t i) {ptsSorted[i] = pts[primIdx[i]];});
-
-		bufferPool->release(std::move(primIdx));
-		bufferPool->release(std::move(_morton));
-
 		// calculate metrics
-
 		parlay::parallel_for(0, ptNum - 1,
 			[&](size_t i) {
 				BuildKernel::calcBuildMetrics(
@@ -113,13 +177,13 @@ namespace pmkd {
 		// 	);
 		// }
 		// else {
-			parlay::parallel_for(0, ptNum,
-				[&](size_t i) {
-					BuildKernel::buildInteriors(
-						i, ptNum, leaves.getRawRepr(), interiors.getRawRepr(), aid);
-				}
-			);
-			//}
+		parlay::parallel_for(0, ptNum,
+			[&](size_t i) {
+				BuildKernel::buildInteriors(
+					i, ptNum, leaves.getRawRepr(), interiors.getRawRepr(), aid);
+			}
+		);
+		//}
 		bufferPool->release(std::move(metrics));
 
 		// calculate new indices for interiors
@@ -129,7 +193,7 @@ namespace pmkd {
 		parlay::parallel_for(0, ptNum - 1,
 			[&](size_t i) {
 				BuildKernel::calcInteriorNewIdx(
-					i, ptNum-1, leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen,aid.leftLeafCount, mapidx.data());
+					i, ptNum - 1, leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen, aid.leftLeafCount, mapidx.data());
 			}
 		);
 		// reorder interiors
@@ -171,17 +235,11 @@ namespace pmkd {
 		// calc node hash
 		parlay::parallel_for(0, ptNum,
 			[&](size_t i) {
-				BuildKernel::calcLeafHash(i, ptNum, ptsSorted.data(), leaves.replacedBy.data(), leaves.hash.data());
-			}
-		);
-		parlay::parallel_for(0, ptNum,
-			[&](size_t i) {
 				BuildKernel::calcInteriorHash(i, ptNum, leaves.getRawRepr(),
-					interiors.getRawRepr(), visitCount.data());
+				interiors.getRawRepr(), visitCount.data());
 			}
 		);
 #endif
-		nodeMgr->append(std::move(leaves), std::move(interiors), std::move(ptsSorted));
 	}
 
 	void PMKDTree::buildIncrement(const vector<vec3f>& ptsAdd) {
@@ -195,26 +253,10 @@ namespace pmkd {
 		auto ptsAddSorted = bufferPool->acquire<vec3f>(sizeInc);
 
 		// get scene boundary
-		sceneBoundary.merge(reduce<AABB>(ptsAdd, MergeOp()));
-		assert(globalBoundary.include(sceneBoundary));
+		//sceneBoundary.merge(reduce<AABB>(ptsAdd, MergeOp()));
+		//assert(globalBoundary.include(sceneBoundary));
 
-		// calculate morton code
-		parlay::parallel_for(0, sizeInc,
-			[&](size_t i) { BuildKernel::calcMortonCodes(i, sizeInc, ptsAdd.data(), &globalBoundary, morton.data()); }
-		);
-		// assign primIdx
-		parlay::parallel_for(0, sizeInc,
-            [&](size_t i) { primIdx[i] = i; }
-		);
-		// sort primIdx
-		parlay::integer_sort_inplace(
-			primIdx,
-			[&](const auto& idx) {return morton[idx].code;});
-
-		// sort ptsAdd
-		parlay::parallel_for(0, sizeInc,
-			[&](size_t i) { ptsAddSorted[i] = ptsAdd[primIdx[i]]; }
-		);
+		sortPts(ptsAdd, ptsAddSorted, primIdx, morton);
 		// sort morton
 		parlay::parallel_for(0, sizeInc,
 			[&](size_t i) { mortonSorted[i] = morton[primIdx[i]]; }
@@ -264,9 +306,7 @@ namespace pmkd {
 		leaves.resizePartial(batchLeafSize);
 		leaves.treeLocalRangeR.resize(batchLeafSize);
 		leaves.derivedFrom.resize(batchLeafSize);
-#ifdef ENABLE_MERKLE
-		leaves.hash.resize(batchLeafSize);
-#endif
+
 
 		Interiors interiors;
 		interiors.resize(batchLeafSize - 1);
@@ -314,7 +354,7 @@ namespace pmkd {
 		bufferPool->release<int>(std::move(combinedBinIdx));
 
 		// plan 1
-		mTimer("设置pt和morton", [&] {
+		//mTimer("设置pt和morton", [&] {
 			// set final points to add
 			parlay::parallel_for(0, batchLeafSize,
 			[&](size_t i) {
@@ -342,7 +382,7 @@ namespace pmkd {
 				}
 			}
 		);
-		});
+		//});
 
 		// plan 2
 		// mTimer("设置pt和morton", [&] {
@@ -513,22 +553,6 @@ namespace pmkd {
 			interiors.parent[interiorCount[i]] = -parentCode;
 		});
 
-		// parlay::parallel_for(0, interiorCount.size(), [&](size_t i) {
-		// 	DynamicBuildKernel::setSubtreeRootParentSplit(i, interiorCount.size(),
-		// 	interiorCount.data(), leaves.derivedFrom.data(), nodeMgrDevice, globalBoundary,
-		// 	interiors.parentSplitDim.data(), interiors.parentSplitVal.data());
-		// });
-		//bufferPool->release<int>(std::move(interiorCount));
-
-		// fmt::print("splitDim:\n{}\n", interiors.splitDim);
-		// fmt::print("splitVal:\n{}\n", interiors.splitVal);
-
-		// fmt::print("add {} points:\n", ptsAddFinal.size());
-		// for (const auto& pt : ptsAddFinal) {
-		// 	fmt::printf("(%f, %f, %f) ", pt.x, pt.y, pt.z);
-		// }
-		// fmt::printf("\n");
-
 #ifdef ENABLE_MERKLE
 		// calculate node hash
 		parlay::parallel_for(0, batchLeafSize,
@@ -576,31 +600,23 @@ namespace pmkd {
 		auto mortonAddSorted = bufferPool->acquire<MortonType>(sizeInc);
 		auto primIdxAdd = bufferPool->acquire<int>(sizeInc);
 		auto ptsAddSorted = bufferPool->acquire<vec3f>(sizeInc);
+
+		vector<vec3f> ptsSortedFinal(ptNum + sizeInc);
+		vector<MortonType> mortonSortedFinal(ptNum + sizeInc);
 #ifdef ENABLE_MERKLE
 		vector<hash_t> hashAdd(sizeInc);
+		vector<hash_t> hashFinal(ptNum + sizeInc);
 #endif
 
 		auto primIdx = bufferPool->acquire<int>(ptNum);
 
 		// get scene boundary
-		sceneBoundary.merge(reduce<AABB>(ptsAdd, MergeOp()));
-		assert(globalBoundary.include(sceneBoundary));
+		//sceneBoundary.merge(reduce<AABB>(ptsAdd, MergeOp()));
+		//assert(globalBoundary.include(sceneBoundary));
 
-		// calculate morton code
-		parlay::parallel_for(0, sizeInc,
-			[&](size_t i) { BuildKernel::calcMortonCodes(i, sizeInc, ptsAdd.data(), &globalBoundary, mortonAdd.data()); }
-		);
-		// assign primIdx
-		parlay::parallel_for(0, sizeInc,
-			[&](size_t i) { primIdxAdd[i] = i; }
-		);
-		// sort primIdx
-		parlay::integer_sort_inplace(
-			primIdxAdd,
-			[&](const auto& idx) {return mortonAdd[idx].code;});
-
+		sortPts(ptsAdd, ptsAddSorted, primIdxAdd, mortonAdd);
 		parlay::parallel_for(0, sizeInc, [&](size_t i) { mortonAddSorted[i] = mortonAdd[primIdxAdd[i]];});
-		parlay::parallel_for(0, sizeInc, [&](size_t i) { ptsAddSorted[i] = ptsAdd[primIdxAdd[i]];});
+
 #ifdef ENABLE_MERKLE
 		parlay::parallel_for(0, sizeInc, [&](size_t i) { BuildKernel::calcLeafHash(i, sizeInc, ptsAddSorted.data(), hashAdd.data());});
 #endif
@@ -623,29 +639,24 @@ namespace pmkd {
 		bufferPool->release<int>(std::move(primIdx));
 		bufferPool->release<int>(std::move(primIdxAdd));
 
-		vector<vec3f> ptsSortedFinal(ptNum + sizeInc);
+
 		parlay::parallel_for(0, ptNum + sizeInc, [&](size_t i) {
 			int j = primIdxFinal[i];
 			ptsSortedFinal[i] = j < ptNum ? pts[j] : ptsAddSorted[j - ptNum];
 		});
-
 		bufferPool->release<vec3f>(std::move(ptsAddSorted));
 
-		vector<MortonType> mortonSortedFinal(ptNum + sizeInc);
 		parlay::parallel_for(0, ptNum + sizeInc, [&](size_t i) {
 			int j = primIdxFinal[i];
 			mortonSortedFinal[i] = j < ptNum ? leaves.morton[j] : mortonAddSorted[j - ptNum];
 		});
-		
 		bufferPool->release<MortonType>(std::move(mortonAddSorted));
 
 #ifdef ENABLE_MERKLE
-		vector<hash_t> hashFinal(ptNum + sizeInc);
 		parlay::parallel_for(0, ptNum + sizeInc, [&](size_t i) {
 			int j = primIdxFinal[i];
 			hashFinal[i] = j < ptNum ? leaves.hash[j] : hashAdd[j - ptNum];
 		});
-
 		hashAdd.clear();
 #endif
 		primIdxFinal.clear();
@@ -661,107 +672,9 @@ namespace pmkd {
 #endif
 
 		interiors.resize(ptNum - 1);
-		auto metrics = bufferPool->acquire<uint8_t>(ptNum - 1);
-		auto mapidx = bufferPool->acquire<int>(ptNum - 1);
-		auto splitDim = bufferPool->acquire<int>(ptNum - 1);
-		auto splitVal = bufferPool->acquire<mfloat>(ptNum - 1);
-		auto parent = bufferPool->acquire<int>(ptNum - 1);
 
-		// build aid
-		auto visitCount = vector<AtomicCount>(ptNum - 1);
-		auto innerBuf = bufferPool->acquire<int>(ptNum - 1, 0);
-		auto leafBuf = bufferPool->acquire<int>(ptNum, 0);
-
-		// calculate metrics
-
-		parlay::parallel_for(0, ptNum - 1,
-			[&](size_t i) {
-				BuildKernel::calcBuildMetrics(
-					i, ptNum - 1, globalBoundary, leaves.morton.data(), metrics.data(),
-					interiors.splitDim.data(), interiors.splitVal.data());
-			}
-		);
-
-		BuildAid aid{ metrics.data(), visitCount.data(), innerBuf.data(),leafBuf.data() };
-
-		// build interior nodes
-		// note: the following optimization does not prove better on CPU
-		// may be better on GPU
-		// if (config.optimize) {
-		// 	int* range[2] = { interiors.rangeL.data(),interiors.rangeR.data() };
-		// 	parlay::parallel_for(0, ptNum,
-		// 		[&](size_t i) {
-		// 			BuildKernel::buildInteriors_opt(
-		// 				i, ptNum, leaves.getRawRepr(),
-		// 				range, interiors.splitDim.data(), interiors.splitVal.data(),
-		// 				interiors.parentSplitDim.data(), interiors.parentSplitVal.data(),
-		// 				aid);
-		// 		}
-		// 	);
-		// }
-		// else {
-		parlay::parallel_for(0, ptNum,
-			[&](size_t i) {
-				BuildKernel::buildInteriors(
-					i, ptNum, leaves.getRawRepr(), interiors.getRawRepr(), aid);
-			}
-		);
-		//}
-		bufferPool->release<uint8_t>(std::move(metrics));
-
-		// calculate new indices for interiors
-		auto& segLen = leafBuf;
-		leaves.segOffset = parlay::scan(segLen).first;
-
-		parlay::parallel_for(0, ptNum - 1,
-			[&](size_t i) {
-				BuildKernel::calcInteriorNewIdx(
-					i, ptNum - 1, leaves.getRawRepr(), interiors.getRawRepr(), aid.segLen, aid.leftLeafCount, mapidx.data());
-			}
-		);
-
-		// reorder interiors
-		auto& rangeL = innerBuf;
-		auto& rangeR = leafBuf;
-		rangeR.resize(ptNum - 1);
-
-		parlay::parallel_for(0, ptNum - 1,
-			[&](size_t i) {
-				BuildKernel::reorderInteriors(
-					i, ptNum - 1, mapidx.data(), interiors.getRawRepr(),
-					rangeL.data(), rangeR.data(),
-					splitDim.data(), splitVal.data(), parent.data());
-			}
-		);
-
-		bufferPool->release<int>(std::move(interiors.rangeL));
-		bufferPool->release<int>(std::move(interiors.rangeR));
-		bufferPool->release<int>(std::move(interiors.splitDim));
-		bufferPool->release<mfloat>(std::move(interiors.splitVal));
-		bufferPool->release<int>(std::move(interiors.parent));
-
-		interiors.rangeL = std::move(rangeL);
-		interiors.rangeR = std::move(rangeR);
-		interiors.splitDim = std::move(splitDim);
-		interiors.splitVal = std::move(splitVal);
-		interiors.parent = std::move(parent);
-
-		parlay::parallel_for(0, ptNum,
-			[&](size_t i) {
-				BuildKernel::remapLeafParents(
-					i, ptNum, mapidx.data(), leaves.getRawRepr());
-			}
-		);
-		bufferPool->release<int>(std::move(mapidx));
-
-#ifdef ENABLE_MERKLE
-		parlay::parallel_for(0, ptNum,
-			[&](size_t i) {
-				BuildKernel::calcInteriorHash(i, ptNum, leaves.getRawRepr(),
-					interiors.getRawRepr(), visitCount.data());
-			}
-		);
-#endif
+		buildStatic_LeavesReady(leaves, interiors);
+		nodeMgr->refitBatch(0);
 	}
 	
 	PMKD_PrintInfo PMKDTree::print(bool verbose) const {
@@ -1063,17 +976,8 @@ namespace pmkd {
 		const Query* target = queries.data();
 		// sort queries to improve cache friendlyness
 		if (config.optimize) {
-			vector<MortonType> morton(nq);
-
-			parlay::parallel_for(0, nq,
-				[&](size_t i) { BuildKernel::calcMortonCodes(i, nq, queries.data(), &globalBoundary, morton.data()); }
-			);
-			// note: there are multiple sorting algorithms to choose from
-			parlay::integer_sort_inplace(
-				responses.queryIdx, [&](const auto& idx) {return morton[idx].code;});
-
-			queriesSorted.resize(nq);
-			parlay::parallel_for(0, nq, [&](size_t i) {queriesSorted[i] = queries[responses.queryIdx[i]];});
+			queriesSorted = bufferPool->acquire<vec3f>(nq);
+			sortPts(queries, queriesSorted, responses.queryIdx);
 			target = queriesSorted.data();
 		}
 
@@ -1086,16 +990,17 @@ namespace pmkd {
 				[&](size_t i) {
 					SearchKernel::searchPoints(
 						i, nq, target, nodeMgr->getPtsBatch(0).data(), primSize(),
-						interiors.getRawRepr(), leaves.getRawRepr(), sceneBoundary, responses.exist.data());
+						interiors.getRawRepr(), leaves.getRawRepr(), AABB::worldBox(), responses.exist.data());
 				}
 			);
 		}
 		else {
 			parlay::parallel_for(0, nq, [&](size_t i) {
-				SearchKernel::searchPoints(i,nq,target,nodeMgr->getDeviceHandle(),primSize(),sceneBoundary, responses.exist.data());
+				SearchKernel::searchPoints(i, nq, target, nodeMgr->getDeviceHandle(), primSize(), AABB::worldBox(), responses.exist.data());
 			});
 		}
 
+		if (!queriesSorted.empty()) bufferPool->release(std::move(queriesSorted));
 		return responses;
 	}
 
@@ -1107,13 +1012,12 @@ namespace pmkd {
 		const RangeQuery* target = queries.data();
 		// note: sort queries as an optimization
 		if (config.optimize) {
-			vector<vec3f> centers(nq);
+			auto centers = bufferPool->acquire<vec3f>(nq);
+			auto morton = bufferPool->acquire<MortonType>(nq);
+
 			parlay::parallel_for(0, nq,
 				[&](size_t i) { centers[i] = queries[i].center(); }
 			);
-
-			vector<MortonType> morton(nq);
-
 			parlay::parallel_for(0, nq,
 				[&](size_t i) { BuildKernel::calcMortonCodes(i, nq, centers.data(), &globalBoundary, morton.data()); }
 			);
@@ -1125,6 +1029,9 @@ namespace pmkd {
 			parlay::parallel_for(0, nq, [&](size_t i) {queriesSorted[i] = queries[responses.queryIdx[i]];});
 
 			target = queriesSorted.data();
+
+			bufferPool->release(std::move(centers));
+			bufferPool->release(std::move(morton));
 		}
 
 		if (isStatic) {
@@ -1137,14 +1044,14 @@ namespace pmkd {
 					SearchKernel::searchRanges(
 						i, nq, target, nodeMgr->getPtsBatch(0).data(), primSize(),
 						interiors.getRawRepr(), leaves.getRawRepr(),
-						sceneBoundary, responses.getRawRepr());
+						AABB::worldBox(), responses.getRawRepr());
 				}
 			);
 		}
 		else {
 			parlay::parallel_for(0, nq, [&](size_t i) {
 				SearchKernel::searchRanges(i, nq, target,
-				nodeMgr->getDeviceHandle(), primSize(), sceneBoundary,
+				nodeMgr->getDeviceHandle(), primSize(), AABB::worldBox(),
 				responses.getRawRepr());
 				});
 		}
@@ -1176,12 +1083,12 @@ namespace pmkd {
 		const RangeQuery* target = queries.data();
 		// sort queries as an optimization
 		if (config.optimize) {
-			vector<vec3f> centers(nq);
+			auto centers = bufferPool->acquire<vec3f>(nq);
+			auto morton = bufferPool->acquire<MortonType>(nq);
+
 			parlay::parallel_for(0, nq,
 				[&](size_t i) { centers[i] = queries[i].center(); }
 			);
-
-			vector<MortonType> morton(nq);
 
 			parlay::parallel_for(0, nq,
 				[&](size_t i) { BuildKernel::calcMortonCodes(i, nq, centers.data(), &globalBoundary, morton.data()); }
@@ -1194,6 +1101,9 @@ namespace pmkd {
 			parlay::parallel_for(0, nq, [&](size_t i) {queriesSorted[i] = queries[responses.queryIdx[i]];});
 
 			target = queriesSorted.data();
+
+			bufferPool->release(std::move(centers));
+			bufferPool->release(std::move(morton));
 		}
 
 		NodeMgrDevice nodeMgrDevice = nodeMgr->getDeviceHandle();
@@ -1256,28 +1166,13 @@ namespace pmkd {
 
 		// sort queries to improve cache friendlyness
 		if (config.optimize) {
-			auto primIdx = bufferPool->acquire<int>(nq);
-			auto morton = bufferPool->acquire<MortonType>(nq);
 			ptsRemoveSorted = bufferPool->acquire<vec3f>(nq);
-
-			parlay::parallel_for(0, nq,
-				[&](size_t i) { primIdx[i] = i; }
-            );
-
-			parlay::parallel_for(0, nq,
-				[&](size_t i) { BuildKernel::calcMortonCodes(i, nq, ptsRemove.data(), &globalBoundary, morton.data()); }
-			);
-			// note: there are multiple sorting algorithms to choose from
-			parlay::integer_sort_inplace(
-				primIdx, [&](const auto& idx) {return morton[idx].code;});
-			
-			parlay::parallel_for(0, nq, [&](size_t i) {ptsRemoveSorted[i] = ptsRemove[primIdx[i]]; });
-
-			bufferPool->release(std::move(primIdx));
-			bufferPool->release(std::move(morton));
+			sortPts(ptsRemove, ptsRemoveSorted);
 
 			target = ptsRemoveSorted.data();
 		}
+
+		auto nodeMgrDeviceHandle = nodeMgr->getDeviceHandle();
 
 		if (isStatic) {
 			assert(nodeMgr->numBatches() == 1);
@@ -1291,24 +1186,27 @@ namespace pmkd {
 				}
 			);
 
+#ifdef ENABLE_MERKLE
+			parlay::parallel_for(0, nq, [&](size_t i) {
+				UpdateKernel::calcSelectedLeafHash(i, nq, binIdx.data(), nodeMgrDeviceHandle);
+			});
+#endif
+
 			parlay::parallel_for(0, nq, [&](size_t i) {
 				UpdateKernel::removePoints_step2(i, nq, primSize(), binIdx.data(), leaves.getRawRepr(), interiors.getRawRepr());
 			});
-			// fmt::print("segOffset: {}\n{}\n", leaves.segOffset.size(), leaves.segOffset);
-			// fmt::print("alterState: {}\n", interiors.alterState.size());
-			// for (size_t i = 0;i < interiors.size();i++) {
-			// 	std::bitset<8> binary(interiors.alterState[i].cnt.load(std::memory_order_relaxed));
-			// 	fmt::print("{}, ", binary.to_string());
-			// }
-			// fmt::print("\n");
 		}
 		else {
-			auto nodeMgrDeviceHandle = nodeMgr->getDeviceHandle();
-			
 			parlay::parallel_for(0, nq, [&](size_t i) {
 				UpdateKernel::removePoints_step1(i, nq, target, nodeMgrDeviceHandle, primSize(), binIdx.data());
 				}
 			);
+
+#ifdef ENABLE_MERKLE
+			parlay::parallel_for(0, nq, [&](size_t i) {
+				UpdateKernel::calcSelectedLeafHash(i, nq, binIdx.data(), nodeMgrDeviceHandle);
+				});
+#endif
 
 			parlay::parallel_for(0, nq, [&](size_t i) {
                 UpdateKernel::removePoints_step2(i, nq, binIdx.data(), nodeMgrDeviceHandle);
@@ -1316,5 +1214,120 @@ namespace pmkd {
 		}
 		if (!ptsRemoveSorted.empty()) bufferPool->release(std::move(ptsRemoveSorted));
 		bufferPool->release(std::move(binIdx));
+
+		isStatic = false;
+	}
+
+	void PMKDTree::remove_v2(const vector<vec3f>& ptsRemove) {
+		assert(isStatic);
+
+		if (ptsRemove.empty()) return;
+
+		size_t nq = ptsRemove.size();
+
+		vector<vec3f> ptsRemoveSorted;
+		const vec3f* target = ptsRemove.data();
+
+		size_t ptNum = primSize();
+		size_t ptNumNew = ptNum - nq;
+
+		// note: memory allocation can be async
+		auto primIdxNew = bufferPool->acquire<int>(ptNumNew);
+		vector<vec3f> ptsFinal(ptNumNew);
+		vector<MortonType> mortonFinal(ptNumNew);
+#ifdef ENABLE_MERKLE
+		vector<hash_t> hashFinal(ptNumNew);
+#endif
+
+		// sort queries to improve cache friendlyness
+		if (config.optimize) {
+			ptsRemoveSorted = bufferPool->acquire<vec3f>(nq);
+			sortPts(ptsRemove, ptsRemoveSorted);
+
+			target = ptsRemoveSorted.data();
+		}
+
+		assert(nodeMgr->numBatches() == 1);
+		auto& leaves = nodeMgr->getLeaves(0);
+		auto& interiors = nodeMgr->getInteriors(0);
+		auto& pts = nodeMgr->getPtsBatch(0);
+
+		parlay::parallel_for(0, nq,
+			[&](size_t i) {
+				UpdateKernel::removePoints_v2_step1(i, nq, target, pts.data(), ptNum,
+				interiors.getRawRepr(), leaves.getRawRepr());
+			}
+		);
+
+		if (!ptsRemoveSorted.empty()) bufferPool->release(std::move(ptsRemoveSorted));
+
+		// 构造新的leaves，去除binIdx部分
+		// 忽略这部分耗时(todo: better algorithm)
+		mTimer("忽略构造primIdxNew耗时", [&] {
+			auto idxs = parlay::iota<int>(ptNum);
+			parlay::filter_into_uninitialized(idxs, primIdxNew, [&](int e) {return leaves.replacedBy[e] != -1;});
+			// size_t j = 0;
+			// for (size_t i = 0; i < ptNum; i++) {
+			// 	if (leaves.replacedBy[i] == 0) {
+			// 		primIdxNew[j++] = i;
+			// 	}
+			// }
+		});
+
+		parlay::parallel_for(0, ptNumNew, [&](size_t i) {
+			ptsFinal[i] = pts[primIdxNew[i]];
+		});
+
+		parlay::parallel_for(0, ptNumNew, [&](size_t i) {
+			mortonFinal[i] = leaves.morton[primIdxNew[i]];
+		});
+#ifdef ENABLE_MERKLE
+		parlay::parallel_for(0, ptNumNew, [&](size_t i) {
+			hashFinal[i] = leaves.hash[primIdxNew[i]];
+		});
+#endif
+		bufferPool->release(std::move(primIdxNew));
+
+// 		leaves.morton = std::move(mortonFinal);
+// #ifdef ENABLE_MERKLE
+// 		leaves.hash = std::move(hashFinal);
+// #endif
+// 		leaves.replacedBy.clear();
+// 		leaves.replacedBy.resize(ptNumNew, 0);
+// 		leaves.parent.resize(ptNumNew);
+// 		interiors.resize(ptNumNew - 1);
+		
+// 		pts = std::move(ptsFinal);
+
+// 		// get scene boundary
+// 		sceneBoundary = reduce<AABB>(pts, MergeOp());
+// 		globalBoundary = sceneBoundary;
+
+// 		buildStatic_LeavesReady(leaves, interiors);
+// 		nodeMgr->refitBatch(0);
+
+
+		Leaves leavesNew = std::move(leaves);
+		leavesNew.replacedBy.clear();
+		leavesNew.replacedBy.resize(ptNumNew, 0);
+		leavesNew.parent.resize(ptNumNew);
+
+		Interiors interiorsNew = std::move(interiors);
+		interiorsNew.resize(ptNumNew - 1);
+
+		destroy();
+		isStatic = true;
+
+		// get scene boundary
+		//sceneBoundary = reduce<AABB>(ptsFinal, MergeOp());
+		//globalBoundary.merge(sceneBoundary);
+
+		leavesNew.morton = std::move(mortonFinal);
+#ifdef ENABLE_MERKLE
+		leavesNew.hash = std::move(hashFinal);
+#endif
+
+		buildStatic_LeavesReady(leavesNew, interiorsNew);
+		nodeMgr->append(std::move(leavesNew), std::move(interiorsNew), std::move(ptsFinal));
 	}
 }
