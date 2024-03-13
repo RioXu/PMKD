@@ -30,7 +30,7 @@ add_subdirectory("${EXTERNAL_INCLUDE_DIR}/parlaylib" EXCLUDE_FROM_ALL)
 # fmtlog
 add_subdirectory("${EXTERNAL_INCLUDE_DIR}/fmtlog" EXCLUDE_FROM_ALL)
 # OpenSSL
-find_package(OpenSSL) 
+find_package(OpenSSL)
 
 # 是否编译为merkle tree
 add_compile_definitions(ENABLE_MERKLE)
