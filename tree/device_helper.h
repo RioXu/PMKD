@@ -15,7 +15,7 @@ namespace pmkd {
 
     // inline void atomicCopyState(const TopDownStates& src, BottomUpState& dst, int idx, bool hasBeenCopied) {
     //     uint8_t newState = src.child[0][idx] | (src.child[1][idx] << 1);
-    //     uint8_t oldState = dst.fetch_or(newState, std::memory_order_acq_rel);
+    //     uint8_t oldState = dst.fetch_or(newState, std::memory_order_relaxed);
     //     hasBeenCopied = oldState == 0;
     // }
 
@@ -36,27 +36,27 @@ namespace pmkd {
         if (otherVisited == 0) return true;
 
         // td:11, bu: 0 or 1, if bu == 1 then move on
-        uint8_t oldCnt = bu.fetch_add(1, std::memory_order_acq_rel) & 1;
+        uint8_t oldCnt = bu.fetch_add(1, std::memory_order_relaxed) & 1;
         return oldCnt == 1;
     }
 
     inline void setRemoveStateBottomUp(BottomUpState& removeState, bool fromRC) {
         uint8_t bit = 1 << fromRC;
-        removeState.fetch_or(bit, std::memory_order_acq_rel);
+        removeState.fetch_or(bit, std::memory_order_relaxed);
     }
 
     // return if remove state changed from not removed to removed
     // if true then move on
     inline bool setCheckRemoveStateBottomUp(BottomUpState& removeState, bool fromRC) {
         uint8_t bit = 1 << fromRC;
-        return removeState.fetch_or(bit, std::memory_order_acq_rel) == (1 << (1 - fromRC));
+        return removeState.fetch_or(bit, std::memory_order_relaxed) == (1 << (1 - fromRC));
     }
 
     // return if remove state changed from removed to not removed
     // if true then move on
     inline bool unsetRemoveStateBottomUp(BottomUpState& removeState, bool fromRC) {
         uint8_t bit = 1 << fromRC;
-        return removeState.fetch_and(~bit, std::memory_order_acq_rel) == 0b11;
+        return removeState.fetch_and(~bit, std::memory_order_relaxed) == 0b11;
     }
 
     inline bool isInteriorRemoved(const BottomUpState& removeState) {
@@ -66,13 +66,13 @@ namespace pmkd {
 
     
     inline bool setVisitCountBottomUp(AtomicCount& visitCount, bool fromRC) {
-        uint8_t oldCnt = visitCount.cnt.fetch_add(1, std::memory_order_acq_rel);
+        uint8_t oldCnt = visitCount.cnt.fetch_add(1, std::memory_order_relaxed);
         return oldCnt  == 1;
     }
 
     // use bottom-up visit state as visit count
     inline bool setVisitStateBottomUpAsVisitCount(BottomUpState& visitCount, bool fromRC) {
-        uint8_t oldCnt = visitCount.fetch_add(1, std::memory_order_acq_rel) & 1;
+        uint8_t oldCnt = visitCount.fetch_add(1, std::memory_order_relaxed) & 1;
         return oldCnt == 1;
     }
 

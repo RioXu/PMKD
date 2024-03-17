@@ -204,7 +204,7 @@ namespace pmkd {
 		const hash_t* childHash = leaves.hash + current;
 
 		// choose parent in bottom-up fashion. O(n)
-		while (visitCount[parent].cnt.fetch_add(1, std::memory_order_acq_rel) == 3)
+		while (visitCount[parent].cnt.fetch_add(1, std::memory_order_relaxed) == 3)
 		{
 			current = parent;
 

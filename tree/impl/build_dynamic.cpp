@@ -123,7 +123,7 @@ namespace pmkd {
         bool isRC;
         decodeParentCode(leaves.parent[idx], parentIdx, isRC);
         int mapped_idx = mapidx[parentIdx];
-        assert(mapped_idx != -1);
+        //assert(mapped_idx != -1);
 
         leaves.parent[idx] = encodeParentCode(mapped_idx, isRC);
     }

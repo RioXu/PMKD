@@ -1,6 +1,5 @@
 #include <tree/device_helper.h>
 #include <tree/kernel.h>
-#include <common/util/atomic_ext.h>
 
 namespace pmkd {
 

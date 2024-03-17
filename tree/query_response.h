@@ -35,8 +35,6 @@ namespace pmkd {
 		}
 
 		size_t size() const { return queryIdx.size(); }
-
-		~QueryResponses() {}
 	};
 
 	struct RangeQueryResponse {
@@ -96,6 +94,7 @@ namespace pmkd {
 			capPerResponse = capacityPerResponse;
 			buffer.clear();
 			buffer.resize(numResponse * capPerResponse);
+			respSize.clear();
 			respSize.resize(numResponse, 0);
 			queryIdx.resize(numResponse);
 			parlay::parallel_for(0, numResponse, [&](size_t i) {queryIdx[i] = i;});
@@ -142,7 +141,5 @@ namespace pmkd {
 		VerifiableRangeQueryResponses& operator=(VerifiableRangeQueryResponses&&) = default;
 
 		size_t size() const { return queryIdx.size(); }
-
-		~VerifiableRangeQueryResponses() {}
 	};
 }

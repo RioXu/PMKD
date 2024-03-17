@@ -1,5 +1,5 @@
 #pragma once
-#include <deque>
+#include <queue>
 #include <vector>
 #include <memory>
 #include <parlay/sequence.h>
@@ -12,8 +12,10 @@ namespace pmkd {
 	struct PMKD_Config {
 		AABB globalBoundary;
 		bool optimize = true;
-		uint32_t rebuildOnlyThreshold = 1e5;
-		float expandFactor = 1.5f;
+		// rebuild conditions
+		int maxNumBatches = 20;
+		float maxRemovedRatio = 1.0f; // total removed / total valid before this removal
+		float maxDInsertedRatio = 1.0f; // total dynamically inserted / total valid before this insertion
 	};
 
 	struct PMKD_PrintInfo;
@@ -35,8 +37,12 @@ namespace pmkd {
 
 		PMKD_Config config;
 
+		bool needRebuild(int nToDInsert, int nToRemove) const;
+
 		// status
 		bool isStatic;
+		int nTotalRemoved;
+		int nTotalDInserted;
 	public:
 		PMKDTree();
 
@@ -89,6 +95,10 @@ namespace pmkd {
 		void sortPts(const vector<vec3f>& pts, vector<vec3f>& ptsSorted, vector<int>& primIdxInited) const;
 		void sortPts(const vector<vec3f>& pts, vector<vec3f>& ptsSorted, vector<int>& primIdx, vector<MortonType>& mortons) const;
 
+		void rebuildUponInsert(const vector<vec3f>& ptsAdd);
+
+		void rebuildUponRemove(const vector<vec3f>& ptsRemove);
+
 		void buildStatic(const vector<vec3f>& pts);
 
 		void buildStatic_LeavesReady(Leaves& leaves, Interiors& interiors);
@@ -104,32 +114,41 @@ namespace pmkd {
 		PMKD_PrintInfo printDynamic(bool verbose) const;
 	};
 
+	template<typename T>
+	struct CustomLess {
+		bool operator()(const vector<T>& a, const vector<T>& b) const {
+            return a.capacity() < b.capacity();
+        }
+	};
 	// BufferPool
 	class PMKDTree::BufferPool {
 	private:
-		std::deque<vector<uint8_t>> byteBuffers;
-		std::deque<vector<int>> intBuffers;
-		std::deque<vector<mfloat>> floatBuffers;
-		std::deque<vector<vec3f>> vec3fBuffers;
-		std::deque<vector<MortonType>> mortonBuffers;
+		template<typename T>
+		using buffers_t = std::priority_queue < vector<T>, std::vector<vector<T>>, CustomLess<T>>;
+
+		buffers_t<uint8_t> byteBuffers;
+		buffers_t<int> intBuffers;
+		buffers_t<mfloat> floatBuffers;
+		buffers_t<vec3f> vec3fBuffers;
+		buffers_t<MortonType> mortonBuffers;
 
 		template<typename T>
-		std::deque<vector<T>>& getDeque();
+		buffers_t<T>& getDeque();
 
 		template<>
-		std::deque<vector<uint8_t>>& getDeque<uint8_t>() {return byteBuffers; }
+		buffers_t<uint8_t>& getDeque<uint8_t>() { return byteBuffers; }
 
 		template<>
-		std::deque<vector<int>>& getDeque<int>() { return intBuffers; }
+		buffers_t<int>& getDeque<int>() { return intBuffers; }
 
 		template<>
-		std::deque<vector<mfloat>>& getDeque<mfloat>() { return floatBuffers; }
+		buffers_t<mfloat>& getDeque<mfloat>() { return floatBuffers; }
 
 		template<>
-		std::deque<vector<vec3f>>& getDeque<vec3f>() { return vec3fBuffers; }
+		buffers_t<vec3f>& getDeque<vec3f>() { return vec3fBuffers; }
 
 		template<>
-		std::deque<vector<MortonType>>& getDeque<MortonType>() { return mortonBuffers; }
+		buffers_t<MortonType>& getDeque<MortonType>() { return mortonBuffers; }
 	public:
 		BufferPool() {}
 		~BufferPool() {}
@@ -141,9 +160,9 @@ namespace pmkd {
 			//auto buffer = std::move(dq.front());
 			//auto& buffer = dq.front();
 			//auto buffer = dq.front();
-			vector<T> buffer(std::move(dq.front()));
+			vector<T> buffer(std::move(dq.top()));
 			//auto buffer(dq.front());
-			dq.pop_front();
+			dq.pop();
 
 			if (buffer.size() != size)
 				buffer.resize(size);
@@ -155,8 +174,8 @@ namespace pmkd {
 			auto& dq = getDeque<T>();
 			if (dq.empty()) { return vector<T>(size, val); }
 
-			vector<T> buffer(std::move(dq.front()));
-			dq.pop_front();
+			vector<T> buffer(std::move(dq.top()));
+			dq.pop();
 
 			buffer.clear();
 			buffer.resize(size, val);
@@ -169,7 +188,7 @@ namespace pmkd {
 
 			if (buffer.empty()) return;
 			auto& dq = getDeque<T>();
-			dq.push_back(std::move(buffer));
+			dq.push(std::move(buffer));
 		}
 	};
 
@@ -187,7 +206,7 @@ namespace pmkd {
 		std::vector<vec3f> leafPoints;
 
 		PMKD_PrintInfo() {}
-		PMKD_PrintInfo(const PMKD_PrintInfo&) = default;
+		PMKD_PrintInfo(const PMKD_PrintInfo&) = delete;
 		PMKD_PrintInfo(PMKD_PrintInfo&&) = default;
 	};
 }
